@@ -1,0 +1,7 @@
+[package]
+name = "zigbee_hello_world"
+version = "0.1.0"
+authors = ["Frans-Willem Hardijzer <fw@hardijzer.nl>"]
+edition = "2018"
+
+[dependencies]
