@@ -12,16 +12,16 @@ use tokio_service::Service;
 use crate::radio_bridge::serial_protocol;
 
 pub enum RequestCommand {
-    Radio_Prepare = 0,
-    Radio_Transmit,
-    Radio_Send,
-    Radio_ChannelClear,
-    Radio_On,
-    Radio_Off,
-    Radio_GetValue,
-    Radio_SetValue,
-    Radio_GetObject,
-    Radio_SetObject,
+    RadioPrepare = 0,
+    RadioTransmit,
+    RadioSend,
+    RadioChannelClear,
+    RadioOn,
+    RadioOff,
+    RadioGetValue,
+    RadioSetValue,
+    RadioGetObject,
+    RadioSetObject,
 }
 
 pub struct Request {

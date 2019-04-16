@@ -1,2 +1,2 @@
-pub mod basic_api;
+pub mod raw_service;
 pub mod serial_protocol;
