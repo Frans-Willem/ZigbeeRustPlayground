@@ -60,12 +60,16 @@ impl Dispatcher {
     }
     fn resolve(&mut self, request_id: u16, data: Bytes) {
         if let Some(x) = self.in_flight.remove(&request_id) {
-            x.send(Ok(data)).unwrap();
+            if let Err(_) = x.send(Ok(data)) {
+                eprintln!("Warning: Response to request {} was dropped", request_id)
+            }
         }
     }
     fn reject(&mut self, request_id: u16, error: Bytes) {
         if let Some(x) = self.in_flight.remove(&request_id) {
-            x.send(Err(Error::BridgeError(error))).unwrap();
+            if let Err(_) = x.send(Err(Error::BridgeError(error))) {
+                eprintln!("Warning: Rejection of request {} was dropped", request_id)
+            }
         }
     }
 }
@@ -162,11 +166,13 @@ impl Service for RadioBridgeService {
 
     fn call(&self, request: Self::Request) -> Self::Future {
         let (request_id, result) = self.dispatcher.write().unwrap().new_request();
-        self.command_sink.unbounded_send(serial_protocol::Command {
-            command_id: request.command_id as u8,
-            request_id: request_id,
-            data: request.data,
-        }).unwrap();
+        self.command_sink
+            .unbounded_send(serial_protocol::Command {
+                command_id: request.command_id as u8,
+                request_id: request_id,
+                data: request.data,
+            })
+            .unwrap();
         result
     }
 }
