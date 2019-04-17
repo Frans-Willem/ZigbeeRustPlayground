@@ -1,3 +1,4 @@
+extern crate bitfield;
 extern crate bytes;
 extern crate tokio;
 extern crate tokio_core;
@@ -6,6 +7,7 @@ extern crate tokio_serial;
 extern crate tokio_service;
 extern crate tokio_sync;
 
+mod ieee802154;
 mod radio_bridge;
 
 use std::sync::Arc;
