@@ -188,6 +188,28 @@ pub enum MACPowerSource {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum AssociationResponseStatus {
+    AssociationSuccessful = 0,
+    PANAtCapacity = 1,
+    PANAccessDenied = 2,
+    HoppingSequenceOffsetDuplication = 3,
+    FastAssociationSuccessful = 0x80,
+}
+
+impl ParseFromBuf for AssociationResponseStatus {
+    fn parse_from_buf(buf: &mut Buf) -> Result<AssociationResponseStatus, ParseError> {
+        match u8::parse_from_buf(buf)? {
+            0 => Ok(AssociationResponseStatus::AssociationSuccessful),
+            1 => Ok(AssociationResponseStatus::PANAtCapacity),
+            2 => Ok(AssociationResponseStatus::PANAccessDenied),
+            3 => Ok(AssociationResponseStatus::HoppingSequenceOffsetDuplication),
+            0x80 => Ok(AssociationResponseStatus::FastAssociationSuccessful),
+            _ => Err(ParseError::UnexpectedData),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum MACCommand {
     AssociationRequest {
         /* 0x01 */
@@ -198,6 +220,11 @@ pub enum MACCommand {
         security_capability: bool,
         allocate_address: bool,
     },
+    AssociationResponse {
+        /* 0x02 */
+        short_address: ShortAddress,
+        status: AssociationResponseStatus,
+    },
     DataRequest,   /* 0x04 */
     BeaconRequest, /* 0x07 */
 }
@@ -206,6 +233,11 @@ impl ParseFromBuf for MACCommand {
     fn parse_from_buf(buf: &mut Buf) -> Result<MACCommand, ParseError> {
         let command_id = u8::parse_from_buf(buf)?;
         match command_id {
+            2 => {
+                let short_address = ShortAddress::parse_from_buf(buf)?;
+                let status = AssociationResponseStatus::parse_from_buf(buf)?;
+                Ok(MACCommand::AssociationResponse { short_address, status })
+            },
             4 => Ok(MACCommand::DataRequest),
             7 => Ok(MACCommand::BeaconRequest),
             _ => Err(ParseError::UnimplementedBehaviour),
@@ -226,6 +258,10 @@ pub enum MACFrameType {
     Data,
     Ack,
     Command(MACCommand),
+    Reserved,
+    Multipurpose,
+    Fragment,
+    Extended,
 }
 
 impl MACFrameType {
@@ -251,7 +287,12 @@ impl MACFrameType {
             1 => Ok(MACFrameType::Data),
             2 => Ok(MACFrameType::Ack),
             3 => Ok(MACFrameType::Command(MACCommand::parse_from_buf(buf)?)),
-            _ => Err(ParseError::UnexpectedData),
+            4 => Ok(MACFrameType::Reserved),
+            _ => Err(if frame_type > 7 {
+                ParseError::UnexpectedData
+            } else {
+                ParseError::UnimplementedBehaviour
+            }),
         }
     }
 }
