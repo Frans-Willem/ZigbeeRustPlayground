@@ -254,6 +254,7 @@ impl MACFrameType {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct MACFrame {
     pub sequence_number: Option<u8>,
     pub destination_pan: Option<PANID>,
@@ -306,19 +307,18 @@ fn test_parse_mac_frame() {
     // Beacon request
     let input: [u8; 8] = [0x03, 0x08, 0xa5, 0xFF, 0xFF, 0xFF, 0xFF, 0x07];
     let parsed = MACFrame::parse_from_buf(&mut input.into_buf()).unwrap();
-    assert_eq!(parsed.sequence_number, Some(165));
-    assert_eq!(parsed.destination_pan, Some(PANID(0xFFFF)));
     assert_eq!(
-        parsed.destination,
-        AddressSpecification::Short(ShortAddress(0xFFFF))
+        parsed,
+        MACFrame {
+            sequence_number: Some(165),
+            destination_pan: Some(PANID(0xFFFF)),
+            destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
+            source_pan: None,
+            source: AddressSpecification::None,
+            frame_type: MACFrameType::Command(MACCommand::BeaconRequest),
+            payload: Bytes::new()
+        }
     );
-    assert_eq!(parsed.source_pan, None);
-    assert_eq!(parsed.source, AddressSpecification::None);
-    assert_eq!(
-        parsed.frame_type,
-        MACFrameType::Command(MACCommand::BeaconRequest)
-    );
-    assert_eq!(parsed.payload, Bytes::new());
 
     // Link Status
     let input: [u8; 44] = [
@@ -327,16 +327,18 @@ fn test_parse_mac_frame() {
         0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0x00, 0x71, 0x50, 0x83, 0x72, 0x0c, 0xe4,
     ];
     let parsed = MACFrame::parse_from_buf(&mut input.into_buf()).unwrap();
-    assert_eq!(parsed.sequence_number, Some(1));
-    assert_eq!(parsed.destination_pan, Some(PANID(0x7698)));
     assert_eq!(
-        parsed.destination,
-        AddressSpecification::Short(ShortAddress(0xFFFF))
+        parsed,
+        MACFrame {
+            sequence_number: Some(1),
+            destination_pan: Some(PANID(0x7698)),
+            destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
+            source_pan: Some(PANID(0x7698)),
+            source: AddressSpecification::Short(ShortAddress(0)),
+            frame_type: MACFrameType::Data,
+            payload: Bytes::from(&input[9..])
+        }
     );
-    assert_eq!(parsed.source_pan, Some(PANID(0x7698)));
-    assert_eq!(parsed.source, AddressSpecification::Short(ShortAddress(0)));
-    assert_eq!(parsed.frame_type, MACFrameType::Data);
-    assert_eq!(parsed.payload, Bytes::from(&input[9..]));
 
     // Beacon
     let input: [u8; 26] = [
@@ -344,21 +346,23 @@ fn test_parse_mac_frame() {
         0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xff, 0xff, 0xff, 0x00,
     ];
     let parsed = MACFrame::parse_from_buf(&mut input.into_buf()).unwrap();
-    assert_eq!(parsed.sequence_number, Some(64));
-    assert_eq!(parsed.source_pan, Some(PANID(0x7698)));
-    assert_eq!(parsed.source, AddressSpecification::Short(ShortAddress(0)));
-    assert_eq!(parsed.destination_pan, None);
-    assert_eq!(parsed.destination, AddressSpecification::None);
     assert_eq!(
-        parsed.frame_type,
-        MACFrameType::Beacon {
-            beacon_order: 15,
-            superframe_order: 15,
-            final_cap_slot: 15,
-            battery_life_extension: false,
-            pan_coordinator: true,
-            association_permit: true,
+        parsed,
+        MACFrame {
+            sequence_number: Some(64),
+            source_pan: Some(PANID(0x7698)),
+            source: AddressSpecification::Short(ShortAddress(0)),
+            destination_pan: None,
+            destination: AddressSpecification::None,
+            frame_type: MACFrameType::Beacon {
+                beacon_order: 15,
+                superframe_order: 15,
+                final_cap_slot: 15,
+                battery_life_extension: false,
+                pan_coordinator: true,
+                association_permit: true,
+            },
+            payload: Bytes::from(&input[11..])
         }
     );
-    assert_eq!(parsed.payload, Bytes::from(&input[11..]));
 }
