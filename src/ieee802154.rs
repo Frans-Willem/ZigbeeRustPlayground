@@ -178,7 +178,43 @@ impl ParseFromBuf for SuperframeSpecification {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum MACFrameData {
+pub enum MACDeviceType {
+    RFD = 0,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MACPowerSource {
+    Battery = 0,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MACCommand {
+    AssociationRequest {
+        /* 0x01 */
+        alternate_pan_coordinator: bool,
+        device_type: MACDeviceType,
+        power_source: MACPowerSource,
+        receive_on_when_idle: bool,
+        security_capability: bool,
+        allocate_address: bool,
+    },
+    DataRequest,   /* 0x04 */
+    BeaconRequest, /* 0x07 */
+}
+
+impl ParseFromBuf for MACCommand {
+    fn parse_from_buf(buf: &mut Buf) -> Result<MACCommand, ParseError> {
+        let command_id = u8::parse_from_buf(buf)?;
+        match command_id {
+            4 => Ok(MACCommand::DataRequest),
+            7 => Ok(MACCommand::BeaconRequest),
+            _ => Err(ParseError::UnimplementedBehaviour),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MACFrameType {
     Beacon {
         beacon_order: usize,
         superframe_order: usize,
@@ -186,19 +222,13 @@ pub enum MACFrameData {
         battery_life_extension: bool,
         pan_coordinator: bool,
         association_permit: bool,
-        payload: Bytes,
     },
-    Data {
-        payload: Bytes,
-    },
-    Command {
-        command_id: u8,
-        payload: Bytes,
-    },
+    Data,
+    Command(MACCommand),
 }
 
-impl MACFrameData {
-    fn parse_from_buf(frame_type: u16, buf: &mut Buf) -> Result<MACFrameData, ParseError> {
+impl MACFrameType {
+    fn parse_from_buf(frame_type: u16, buf: &mut Buf) -> Result<MACFrameType, ParseError> {
         match frame_type {
             0 => {
                 let superframe_spec = SuperframeSpecification::parse_from_buf(buf)?;
@@ -207,28 +237,18 @@ impl MACFrameData {
                 if gts != 0 || pending_addresses != 0 {
                     Err(ParseError::UnimplementedBehaviour)
                 } else {
-                    Ok(MACFrameData::Beacon {
+                    Ok(MACFrameType::Beacon {
                         beacon_order: superframe_spec.beacon_order() as usize,
                         superframe_order: superframe_spec.superframe_order() as usize,
                         final_cap_slot: superframe_spec.final_cap_slot() as usize,
                         battery_life_extension: superframe_spec.battery_life_extension() != 0,
                         pan_coordinator: superframe_spec.pan_coordinator() != 0,
                         association_permit: superframe_spec.association_permit() != 0,
-                        payload: buf.collect()
                     })
                 }
-            },
-            1 => Ok(MACFrameData::Data {
-                payload: buf.collect(),
-            }),
-            3 => {
-                let command_id = u8::parse_from_buf(buf)?;
-                let payload = buf.collect();
-                Ok(MACFrameData::Command {
-                    command_id,
-                    payload,
-                })
             }
+            1 => Ok(MACFrameType::Data),
+            3 => Ok(MACFrameType::Command(MACCommand::parse_from_buf(buf)?)),
             _ => Err(ParseError::UnexpectedData),
         }
     }
@@ -240,7 +260,8 @@ pub struct MACFrame {
     pub destination: AddressSpecification,
     pub source_pan: Option<PANID>,
     pub source: AddressSpecification,
-    pub data: MACFrameData,
+    pub frame_type: MACFrameType,
+    pub payload: Bytes,
 }
 
 impl ParseFromBuf for MACFrame {
@@ -266,14 +287,16 @@ impl ParseFromBuf for MACFrame {
             Some(PANID::parse_from_buf(buf)?)
         };
         let source = AddressSpecification::parse_from_buf(fsf.source_addressing_mode(), buf)?;
-        let data = MACFrameData::parse_from_buf(fsf.frame_type(), buf)?;
+        let frame_type = MACFrameType::parse_from_buf(fsf.frame_type(), buf)?;
+        let payload = buf.collect();
         Ok(MACFrame {
             sequence_number,
             destination_pan,
             destination,
             source_pan,
             source,
-            data,
+            frame_type,
+            payload,
         })
     }
 }
@@ -292,12 +315,10 @@ fn test_parse_mac_frame() {
     assert_eq!(parsed.source_pan, None);
     assert_eq!(parsed.source, AddressSpecification::None);
     assert_eq!(
-        parsed.data,
-        MACFrameData::Command {
-            command_id: 7,
-            payload: Bytes::new()
-        }
+        parsed.frame_type,
+        MACFrameType::Command(MACCommand::BeaconRequest)
     );
+    assert_eq!(parsed.payload, Bytes::new());
 
     // Link Status
     let input: [u8; 44] = [
@@ -314,12 +335,8 @@ fn test_parse_mac_frame() {
     );
     assert_eq!(parsed.source_pan, Some(PANID(0x7698)));
     assert_eq!(parsed.source, AddressSpecification::Short(ShortAddress(0)));
-    assert_eq!(
-        parsed.data,
-        MACFrameData::Data {
-            payload: Bytes::from(&input[9..])
-        }
-    );
+    assert_eq!(parsed.frame_type, MACFrameType::Data);
+    assert_eq!(parsed.payload, Bytes::from(&input[9..]));
 
     // Beacon
     let input: [u8; 26] = [
@@ -332,14 +349,16 @@ fn test_parse_mac_frame() {
     assert_eq!(parsed.source, AddressSpecification::Short(ShortAddress(0)));
     assert_eq!(parsed.destination_pan, None);
     assert_eq!(parsed.destination, AddressSpecification::None);
-    assert_eq!(parsed.data,
-               MACFrameData::Beacon {
-                   beacon_order: 15,
-                   superframe_order: 15,
-                   final_cap_slot: 15,
-                   battery_life_extension: false,
-                   pan_coordinator: true,
-                   association_permit: true,
-                   payload: Bytes::from(&input[11..]),
-               });
+    assert_eq!(
+        parsed.frame_type,
+        MACFrameType::Beacon {
+            beacon_order: 15,
+            superframe_order: 15,
+            final_cap_slot: 15,
+            battery_life_extension: false,
+            pan_coordinator: true,
+            association_permit: true,
+        }
+    );
+    assert_eq!(parsed.payload, Bytes::from(&input[11..]));
 }
