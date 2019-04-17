@@ -16,7 +16,7 @@ pub enum ParseError {
     UnimplementedBehaviour,
 }
 
-trait ParseFromBuf: Sized {
+pub trait ParseFromBuf: Sized {
     fn parse_from_buf(buf: &mut Buf) -> Result<Self, ParseError>;
 }
 
@@ -224,6 +224,7 @@ pub enum MACFrameType {
         association_permit: bool,
     },
     Data,
+    Ack,
     Command(MACCommand),
 }
 
@@ -248,6 +249,7 @@ impl MACFrameType {
                 }
             }
             1 => Ok(MACFrameType::Data),
+            2 => Ok(MACFrameType::Ack),
             3 => Ok(MACFrameType::Command(MACCommand::parse_from_buf(buf)?)),
             _ => Err(ParseError::UnexpectedData),
         }

@@ -10,9 +10,19 @@ extern crate tokio_sync;
 mod ieee802154;
 mod radio_bridge;
 
+use bytes::{Buf, Bytes, IntoBuf};
+use ieee802154::ParseFromBuf;
 use std::sync::Arc;
 use tokio::prelude::{Future, Stream};
 use tokio_core::reactor::Core;
+
+fn on_packet(packet: Bytes) {
+    println!("<< {:?}", packet);
+    match ieee802154::MACFrame::parse_from_buf(&mut packet.into_buf()) {
+        Ok(x) => println!("== PARSED: {:?}", x),
+        Err(e) => println!("!! Unable to parse {:?}", e),
+    }
+}
 
 fn main() {
     let settings = tokio_serial::SerialPortSettings::default();
@@ -24,7 +34,7 @@ fn main() {
 
     let packet_handler = packet_stream
         .for_each(|pkt| {
-            println!("Got a packet of length {}", pkt.packet.len());
+            on_packet(pkt.packet);
             Ok(())
         })
         .map_err(|e| eprintln!("{:?}", e));
