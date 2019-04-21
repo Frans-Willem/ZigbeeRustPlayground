@@ -19,18 +19,32 @@ mod radio_bridge;
 use bytes::{BufMut, Bytes, IntoBuf};
 use ieee802154::*;
 use parse_serialize::{ParseFromBuf, SerializeToBuf};
-use radio_bridge::service::RadioBridgeService;
+use radio_bridge::service::{BoxServiceFuture, RadioBridgeService};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::prelude::{Future, Stream};
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 
-fn on_mac_frame(frame: ieee802154::MACFrame, service: &RadioBridgeService) {
+fn on_mac_frame(frame: ieee802154::MACFrame, handle: &Handle, service: &RadioBridgeService) {
     println!("== PARSED: {:?}", frame);
+    if let Some(acknowledge) = frame.create_ack() {
+        let mut buf = vec![];
+        acknowledge.serialize_to_buf(&mut buf);
+        handle.spawn(
+            service
+                .send(buf.into())
+                .and_then(|_| {
+                    println!("Ack sent");
+                    Ok(())
+                })
+                .map_err(|e| eprintln!("Send ACK error: {:?}", e)),
+        );
+    }
     match frame.frame_type {
         ieee802154::MACFrameType::Command(ieee802154::MACCommand::BeaconRequest) => {
             println!("Beacon request?");
             let response = MACFrame {
+                acknowledge_request: false,
                 sequence_number: Some(64),
                 destination_pan: None,
                 destination: AddressSpecification::None,
@@ -51,17 +65,35 @@ fn on_mac_frame(frame: ieee802154::MACFrame, service: &RadioBridgeService) {
             let mut buf = vec![];
             response.serialize_to_buf(&mut buf).unwrap();
             println!("Beacon response: {:?}", buf);
+            handle.spawn(
+                service
+                    .send(buf.into())
+                    .and_then(|_| {
+                        println!("Sent!");
+                        Ok(())
+                    })
+                    .map_err(|err| eprintln!("Send error: {:?}", err)),
+            );
         }
         _ => (),
     }
 }
 
-fn on_packet(packet: Bytes, service: &RadioBridgeService) {
+fn on_packet(packet: Bytes, handle: &Handle, service: &RadioBridgeService) {
     println!("<< {:?}", packet);
     match ieee802154::MACFrame::parse_from_buf(&mut packet.into_buf()) {
-        Ok(x) => on_mac_frame(x, service),
+        Ok(x) => on_mac_frame(x, handle, service),
         Err(e) => println!("!! Unable to parse {:?}", e),
     }
+}
+
+fn set_max_power(service: &Arc<RadioBridgeService>) -> BoxServiceFuture<()> {
+    let service_copy = service.clone();
+    Box::new(
+        service
+            .get_txpower_max()
+            .and_then(move |max_power| service_copy.set_txpower(max_power)),
+    )
 }
 
 fn main() {
@@ -74,9 +106,10 @@ fn main() {
     let service = Arc::new(service);
 
     let packet_service = service.clone();
+    let packet_handle = core.handle();
     let packet_handler = packet_stream
         .for_each(move |pkt| {
-            on_packet(pkt.packet, packet_service.deref());
+            on_packet(pkt.packet, &packet_handle, packet_service.deref());
             Ok(())
         })
         .map_err(|e| eprintln!("{:?}", e));
@@ -85,6 +118,7 @@ fn main() {
         .set_channel(25)
         .join(service.set_rx_mode(0))
         .join(service.on())
+        .join(set_max_power(&service))
         .and_then(|_| Ok(println!("Setup complete")))
         .map_err(|e| eprintln!("{:?}", e));
     core.handle().spawn(setup_response);

@@ -7,8 +7,8 @@ use tokio_core::reactor::Handle;
 use tokio_serial::Serial;
 use tokio_service::Service;
 
-type ServiceFuture<T> = Future<Item = T, Error = Error>;
-type BoxServiceFuture<T> = Box<ServiceFuture<T>>;
+pub type ServiceFuture<T> = Future<Item = T, Error = Error>;
+pub type BoxServiceFuture<T> = Box<ServiceFuture<T>>;
 
 pub struct RadioBridgeService {
     inner: raw_service::RadioBridgeService,
@@ -163,6 +163,42 @@ impl RadioBridgeService {
 
     pub fn set_rx_mode(&self, rx_mode: u16) -> BoxServiceFuture<()> {
         self.set_value(RadioParam::RxMode, rx_mode)
+    }
+
+    pub fn get_txpower_max(&self) -> BoxServiceFuture<u16> {
+        self.get_value(RadioParam::TxPowerMax)
+    }
+
+    pub fn get_txpower_min(&self) -> BoxServiceFuture<u16> {
+        self.get_value(RadioParam::TxPowerMin)
+    }
+
+    pub fn set_txpower(&self, tx_power: u16) -> BoxServiceFuture<()> {
+        self.set_value(RadioParam::TxPower, tx_power)
+    }
+
+    pub fn send(&self, data: Bytes) -> BoxServiceFuture<()> {
+        Box::new(
+            self.inner
+                .call(raw_service::Request {
+                    command_id: raw_service::RequestCommand::RadioSend,
+                    data: data,
+                })
+                .map_err(|e| Error::RawError(e))
+                .and_then(|data| {
+                    if data.len() < 2 {
+                        Err(Error::UnexpectedResponseSize)
+                    } else {
+                        let mut data = data.into_buf();
+                        let retval = data.get_u16_be();
+                        if retval == 0 {
+                            Ok(())
+                        } else {
+                            Err(Error::ErrorCode(retval as usize))
+                        }
+                    }
+                }),
+        )
     }
 
     pub fn on(&self) -> BoxServiceFuture<()> {

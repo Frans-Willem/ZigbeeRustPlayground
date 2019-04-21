@@ -4,7 +4,7 @@ use bytes::{Buf, BufMut, Bytes, IntoBuf};
 pub enum ParseError {
     InsufficientData,
     UnexpectedData,
-    Unimplemented,
+    Unimplemented(&'static str),
 }
 pub type ParseResult<T> = Result<T, ParseError>;
 

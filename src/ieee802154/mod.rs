@@ -1,9 +1,9 @@
 use bitfield::bitfield;
+#[cfg(test)]
+use bytes::IntoBuf;
 use bytes::{Buf, BufMut, Bytes};
 use std::convert::{TryFrom, TryInto};
 use std::result::Result;
-#[cfg(test)]
-use bytes::{IntoBuf};
 
 use crate::parse_serialize::{
     ParseError, ParseFromBuf, ParseFromBufTagged, ParseResult, SerializeError, SerializeResult,
@@ -176,7 +176,7 @@ impl From<Option<ExtendedAddress>> for AddressSpecification where {
 }
 
 bitfield! {
-    pub struct SuperframeSpecification(u16);
+    struct SuperframeSpecification(u16);
     impl Debug;
     pub beacon_order, set_beacon_order: 3, 0;
     pub superframe_order, set_superframe_order: 7, 4;
@@ -188,13 +188,15 @@ bitfield! {
 }
 default_parse_serialize_newtype!(SuperframeSpecification, u16);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[TryFromPrimitiveType = "u8"]
 pub enum MACDeviceType {
     RFD = 0, // Reduced function device
     FFD = 1, // Full functioning device
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[TryFromPrimitiveType = "u8"]
 pub enum MACPowerSource {
     Battery = 0, // Not AC powered
     Powered = 1, // AC powered
@@ -209,8 +211,21 @@ pub enum AssociationResponseStatus {
     HoppingSequenceOffsetDuplication = 3,
     FastAssociationSuccessful = 0x80,
 }
-
 default_parse_serialize_enum!(AssociationResponseStatus, u8);
+
+bitfield! {
+    struct AssociationRequest(u8);
+    impl Debug;
+    pub alternate_pan_coordinator, set_alternate_pan_coordinator: 0, 0;
+    pub device_type, set_device_type: 1, 1;
+    pub power_source, set_power_source: 2, 2;
+    pub receive_on_when_idle, set_receive_on_when_idle: 3, 3;
+    pub association_type, set_association_type: 4, 4;
+    pub reserved2, set_reserved2: 5, 5;
+    pub security_capability, set_security_capability: 6, 6;
+    pub allocate_address, set_allocate_address: 7, 7;
+}
+default_parse_serialize_newtype!(AssociationRequest, u8);
 
 #[derive(Debug, PartialEq)]
 pub enum MACCommand {
@@ -236,6 +251,17 @@ impl ParseFromBuf for MACCommand {
     fn parse_from_buf(buf: &mut Buf) -> Result<MACCommand, ParseError> {
         let command_id = u8::parse_from_buf(buf)?;
         match command_id {
+            1 => {
+                let bf = AssociationRequest::parse_from_buf(buf)?;
+                Ok(MACCommand::AssociationRequest {
+                    alternate_pan_coordinator: bf.alternate_pan_coordinator() > 0,
+                    device_type: bf.device_type().try_into().unwrap(),
+                    power_source: bf.power_source().try_into().unwrap(),
+                    receive_on_when_idle: bf.receive_on_when_idle() > 0,
+                    security_capability: bf.security_capability() > 0,
+                    allocate_address: bf.allocate_address() > 0,
+                })
+            }
             2 => {
                 let short_address = ShortAddress::parse_from_buf(buf)?;
                 let status = AssociationResponseStatus::parse_from_buf(buf)?;
@@ -246,7 +272,7 @@ impl ParseFromBuf for MACCommand {
             }
             4 => Ok(MACCommand::DataRequest),
             7 => Ok(MACCommand::BeaconRequest),
-            _ => Err(ParseError::Unimplemented),
+            _ => Err(ParseError::Unimplemented("MACCommand not implemented")),
         }
     }
 }
@@ -278,7 +304,9 @@ impl ParseFromBufTagged<u16> for MACFrameType {
                 let gts = u8::parse_from_buf(buf)?;
                 let pending_addresses = u8::parse_from_buf(buf)?;
                 if gts != 0 || pending_addresses != 0 {
-                    Err(ParseError::Unimplemented)
+                    Err(ParseError::Unimplemented(
+                        "Beacon frame, GTS or pending addresses not empty",
+                    ))
                 } else {
                     Ok(MACFrameType::Beacon {
                         beacon_order: superframe_spec.beacon_order() as usize,
@@ -297,7 +325,7 @@ impl ParseFromBufTagged<u16> for MACFrameType {
             _ => Err(if frame_type > 7 {
                 ParseError::UnexpectedData
             } else {
-                ParseError::Unimplemented
+                ParseError::Unimplemented("MAC Type not implemented")
             }),
         }
     }
@@ -362,6 +390,7 @@ impl SerializeToBufTagged<u16> for MACFrameType {
 
 #[derive(Debug, PartialEq)]
 pub struct MACFrame {
+    pub acknowledge_request: bool,
     pub sequence_number: Option<u8>,
     pub destination_pan: Option<PANID>,
     pub destination: AddressSpecification,
@@ -374,6 +403,7 @@ pub struct MACFrame {
 impl ParseFromBuf for MACFrame {
     fn parse_from_buf(buf: &mut Buf) -> Result<MACFrame, ParseError> {
         let fsf = FrameControl::parse_from_buf(buf)?;
+        let acknowledge_request = fsf.acknowledge_request() > 0;
         let sequence_number = if fsf.sequence_number_supression() != 0 {
             None
         } else {
@@ -397,6 +427,7 @@ impl ParseFromBuf for MACFrame {
         let frame_type = MACFrameType::parse_from_buf(fsf.frame_type(), buf)?;
         let payload = buf.collect();
         Ok(MACFrame {
+            acknowledge_request,
             sequence_number,
             destination_pan,
             destination,
@@ -479,7 +510,7 @@ impl SerializeToBuf for MACFrame {
         fsf.set_frame_type(self.frame_type.get_serialize_tag()?);
         fsf.set_security_enabled(0);
         fsf.set_frame_pending(0);
-        fsf.set_acknowledge_request(0);
+        fsf.set_acknowledge_request(self.acknowledge_request.into());
         fsf.set_pan_id_compression(
             (self.source_pan == self.destination_pan && self.source_pan.is_some()).into(),
         );
@@ -528,5 +559,30 @@ fn test_serialize_mac_frame() {
     };
     let mut buf = vec![];
     input.serialize_to_buf(&mut buf).unwrap();
-    assert_eq!(vec![0x00, 0x80, 0x40, 0x98, 0x76, 0x00, 0x00, 0xFF, 0xCF, 0x00, 0x00, 0x00, 0x22, 0x84, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF, 0x00], buf);
+    assert_eq!(
+        vec![
+            0x00, 0x80, 0x40, 0x98, 0x76, 0x00, 0x00, 0xFF, 0xCF, 0x00, 0x00, 0x00, 0x22, 0x84,
+            0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF, 0x00
+        ],
+        buf
+    );
+}
+
+impl MACFrame {
+    pub fn create_ack(&self) -> Option<MACFrame> {
+        if !self.acknowledge_request {
+            None
+        } else {
+            Some(MACFrame {
+                acknowledge_request: false,
+                sequence_number: self.sequence_number,
+                destination_pan: None,
+                destination: AddressSpecification::None,
+                source_pan: None,
+                source: AddressSpecification::None,
+                frame_type: MACFrameType::Ack,
+                payload: Bytes::new(),
+            })
+        }
+    }
 }
