@@ -1,10 +1,10 @@
-use bytes::{Buf,BufMut};
+use bytes::{Buf, BufMut, Bytes, IntoBuf};
 
 #[derive(Debug)]
 pub enum ParseError {
     InsufficientData,
     UnexpectedData,
-    Unimplemented
+    Unimplemented,
 }
 pub type ParseResult<T> = Result<T, ParseError>;
 
@@ -14,14 +14,25 @@ pub trait ParseFromBuf: Sized {
 
 #[derive(Debug)]
 pub enum SerializeError {
+    Unimplemented,
 }
 pub type SerializeResult = Result<(), SerializeError>;
 
 pub trait SerializeToBuf {
     fn expected_size(&self) -> usize {
-        return 0
+        return 0;
     }
     fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult;
+}
+
+impl SerializeToBuf for Bytes {
+    fn expected_size(&self) -> usize {
+        self.len()
+    }
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
+        BufMut::put_slice(buf, self);
+        Ok(())
+    }
 }
 
 /* Default implementations */
@@ -61,24 +72,24 @@ default_impl!(i64, get_i64_le, put_i64_le);
 macro_rules! default_parse_serialize_newtype {
     ($t:ident, $i:ident) => {
         impl ParseFromBuf for $t {
-            fn parse_from_buf(buf:&mut bytes::Buf) -> ParseResult<$t> {
+            fn parse_from_buf(buf: &mut bytes::Buf) -> ParseResult<$t> {
                 Ok($t($i::parse_from_buf(buf)?))
             }
         }
         impl SerializeToBuf for $t {
             fn expected_size(&self) -> usize {
                 match self {
-                    $t(inner) => inner.expected_size()
+                    $t(inner) => inner.expected_size(),
                 }
             }
 
             fn serialize_to_buf(&self, buf: &mut bytes::BufMut) -> SerializeResult {
                 match self {
-                    $t(inner) => inner.serialize_to_buf(buf)
+                    $t(inner) => inner.serialize_to_buf(buf),
                 }
             }
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -86,7 +97,7 @@ macro_rules! default_parse_serialize_enum {
     ($t:ident, $i:ident) => {
         impl ParseFromBuf for $t {
             fn parse_from_buf(buf: &mut bytes::Buf) -> ParseResult<$t> {
-                $t::try_from($i::parse_from_buf(buf)?).map_err(|e| ParseError::UnexpectedData)
+                $t::try_from($i::parse_from_buf(buf)?).map_err(|_| ParseError::UnexpectedData)
             }
         }
         impl SerializeToBuf for $t {
@@ -98,5 +109,13 @@ macro_rules! default_parse_serialize_enum {
                 (*self as $i).serialize_to_buf(buf)
             }
         }
-    }
+    };
+}
+
+pub trait ParseFromBufTagged<T>: Sized {
+    fn parse_from_buf(tag: T, buf: &mut Buf) -> ParseResult<Self>;
+}
+
+pub trait SerializeToBufTagged<T>: SerializeToBuf {
+    fn get_serialize_tag(&self) -> Result<T, SerializeError>;
 }
