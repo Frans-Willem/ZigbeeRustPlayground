@@ -6,12 +6,17 @@ extern crate tokio_io;
 extern crate tokio_serial;
 extern crate tokio_service;
 extern crate tokio_sync;
+#[macro_use]
+extern crate enum_tryfrom_derive;
+extern crate enum_tryfrom;
 
+#[macro_use]
+mod parse_serialize;
 mod ieee802154;
 mod radio_bridge;
 
 use bytes::{Buf, Bytes, IntoBuf};
-use ieee802154::ParseFromBuf;
+use parse_serialize::ParseFromBuf;
 use std::sync::Arc;
 use tokio::prelude::{Future, Stream};
 use tokio_core::reactor::Core;

@@ -1,69 +1,22 @@
 use bitfield::{bitfield, bitfield_bitrange, bitfield_fields, BitRange};
 use bytes::{buf::FromBuf, Buf, Bytes, IntoBuf};
 use std::result::Result;
+use std::convert::TryFrom;
+
+use crate::parse_serialize::{ParseFromBuf, ParseError, ParseResult, SerializeToBuf, SerializeResult};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShortAddress(u16);
+default_parse_serialize_newtype!(ShortAddress, u16);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExtendedAddress(u64);
+default_parse_serialize_newtype!(ExtendedAddress, u64);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PANID(u16);
+default_parse_serialize_newtype!(PANID, u16);
 
-#[derive(Debug)]
-pub enum ParseError {
-    InsufficientData,
-    UnexpectedData,
-    UnimplementedBehaviour,
-}
-
-pub trait ParseFromBuf: Sized {
-    fn parse_from_buf(buf: &mut Buf) -> Result<Self, ParseError>;
-}
-
-impl ParseFromBuf for u16 {
-    fn parse_from_buf(buf: &mut Buf) -> Result<u16, ParseError> {
-        if buf.remaining() < 2 {
-            Err(ParseError::InsufficientData)
-        } else {
-            Ok(buf.get_u16_le())
-        }
-    }
-}
-
-impl ParseFromBuf for u8 {
-    fn parse_from_buf(buf: &mut Buf) -> Result<u8, ParseError> {
-        if buf.remaining() < 1 {
-            Err(ParseError::InsufficientData)
-        } else {
-            Ok(buf.get_u8())
-        }
-    }
-}
-impl ParseFromBuf for u64 {
-    fn parse_from_buf(buf: &mut Buf) -> Result<u64, ParseError> {
-        if buf.remaining() < 8 {
-            Err(ParseError::InsufficientData)
-        } else {
-            Ok(buf.get_u64_le())
-        }
-    }
-}
-
-impl ParseFromBuf for PANID {
-    fn parse_from_buf(buf: &mut Buf) -> Result<PANID, ParseError> {
-        Ok(PANID(u16::parse_from_buf(buf)?))
-    }
-}
-impl ParseFromBuf for ShortAddress {
-    fn parse_from_buf(buf: &mut Buf) -> Result<ShortAddress, ParseError> {
-        Ok(ShortAddress(u16::parse_from_buf(buf)?))
-    }
-}
-impl ParseFromBuf for ExtendedAddress {
-    fn parse_from_buf(buf: &mut Buf) -> Result<ExtendedAddress, ParseError> {
-        Ok(ExtendedAddress(u64::parse_from_buf(buf)?))
-    }
-}
 
 bitfield! {
     pub struct FrameControl(u16);
@@ -80,12 +33,7 @@ bitfield! {
     pub frame_version, _: 13, 12;
     pub source_addressing_mode, _: 15, 14;
 }
-
-impl ParseFromBuf for FrameControl {
-    fn parse_from_buf(buf: &mut Buf) -> Result<FrameControl, ParseError> {
-        Ok(FrameControl(u16::parse_from_buf(buf)?))
-    }
-}
+default_parse_serialize_newtype!(FrameControl, u16);
 
 #[test]
 fn test_frame_control_parsing() {
@@ -170,24 +118,22 @@ bitfield! {
     pub pan_coordinator, _: 14, 14;
     pub association_permit, _: 15, 15;
 }
-
-impl ParseFromBuf for SuperframeSpecification {
-    fn parse_from_buf(buf: &mut Buf) -> Result<SuperframeSpecification, ParseError> {
-        Ok(SuperframeSpecification(u16::parse_from_buf(buf)?))
-    }
-}
+default_parse_serialize_newtype!(SuperframeSpecification, u16);
 
 #[derive(Debug, PartialEq)]
 pub enum MACDeviceType {
-    RFD = 0,
+    RFD = 0, // Reduced function device
+    FFD = 1, // Full functioning device
 }
 
 #[derive(Debug, PartialEq)]
 pub enum MACPowerSource {
-    Battery = 0,
+    Battery = 0, // Not AC powered
+    Powered = 1, // AC powered
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[TryFromPrimitiveType="u8"]
 pub enum AssociationResponseStatus {
     AssociationSuccessful = 0,
     PANAtCapacity = 1,
@@ -196,18 +142,7 @@ pub enum AssociationResponseStatus {
     FastAssociationSuccessful = 0x80,
 }
 
-impl ParseFromBuf for AssociationResponseStatus {
-    fn parse_from_buf(buf: &mut Buf) -> Result<AssociationResponseStatus, ParseError> {
-        match u8::parse_from_buf(buf)? {
-            0 => Ok(AssociationResponseStatus::AssociationSuccessful),
-            1 => Ok(AssociationResponseStatus::PANAtCapacity),
-            2 => Ok(AssociationResponseStatus::PANAccessDenied),
-            3 => Ok(AssociationResponseStatus::HoppingSequenceOffsetDuplication),
-            0x80 => Ok(AssociationResponseStatus::FastAssociationSuccessful),
-            _ => Err(ParseError::UnexpectedData),
-        }
-    }
-}
+default_parse_serialize_enum!(AssociationResponseStatus, u8);
 
 #[derive(Debug, PartialEq)]
 pub enum MACCommand {
@@ -240,7 +175,7 @@ impl ParseFromBuf for MACCommand {
             },
             4 => Ok(MACCommand::DataRequest),
             7 => Ok(MACCommand::BeaconRequest),
-            _ => Err(ParseError::UnimplementedBehaviour),
+            _ => Err(ParseError::Unimplemented),
         }
     }
 }
@@ -272,7 +207,7 @@ impl MACFrameType {
                 let gts = u8::parse_from_buf(buf)?;
                 let pending_addresses = u8::parse_from_buf(buf)?;
                 if gts != 0 || pending_addresses != 0 {
-                    Err(ParseError::UnimplementedBehaviour)
+                    Err(ParseError::Unimplemented)
                 } else {
                     Ok(MACFrameType::Beacon {
                         beacon_order: superframe_spec.beacon_order() as usize,
@@ -291,7 +226,7 @@ impl MACFrameType {
             _ => Err(if frame_type > 7 {
                 ParseError::UnexpectedData
             } else {
-                ParseError::UnimplementedBehaviour
+                ParseError::Unimplemented
             }),
         }
     }
