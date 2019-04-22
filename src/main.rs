@@ -29,7 +29,7 @@ fn on_mac_frame(frame: ieee802154::MACFrame, handle: &Handle, service: &RadioBri
     println!("== PARSED: {:?}", frame);
     if let Some(acknowledge) = frame.create_ack() {
         let mut buf = vec![];
-        acknowledge.serialize_to_buf(&mut buf);
+        acknowledge.serialize_to_buf(&mut buf).unwrap();
         handle.spawn(
             service
                 .send(buf.into())
@@ -80,10 +80,9 @@ fn on_mac_frame(frame: ieee802154::MACFrame, handle: &Handle, service: &RadioBri
 }
 
 fn on_packet(packet: Bytes, handle: &Handle, service: &RadioBridgeService) {
-    println!("<< {:?}", packet);
-    match ieee802154::MACFrame::parse_from_buf(&mut packet.into_buf()) {
+    match ieee802154::MACFrame::parse_from_buf(&mut packet.clone().into_buf()) {
         Ok(x) => on_mac_frame(x, handle, service),
-        Err(e) => println!("!! Unable to parse {:?}", e),
+        Err(e) => println!("!! {:?}, {:?}", packet, e),
     }
 }
 
@@ -91,8 +90,8 @@ fn set_max_power(service: &Arc<RadioBridgeService>) -> BoxServiceFuture<()> {
     let service_copy = service.clone();
     Box::new(
         service
-            .get_txpower_max()
-            .and_then(move |max_power| service_copy.set_txpower(max_power)),
+            .get_tx_power_max()
+            .and_then(move |max_power| service_copy.set_tx_power(max_power)),
     )
 }
 
@@ -116,7 +115,11 @@ fn main() {
 
     let setup_response = service
         .set_channel(25)
-        .join(service.set_rx_mode(0))
+        .join(service.set_rx_mode(radio_bridge::service::RadioRxMode {
+            address_filter: false,
+            autoack: false,
+            poll_mode: false,
+        }))
         .join(service.on())
         .join(set_max_power(&service))
         .and_then(|_| Ok(println!("Setup complete")))
