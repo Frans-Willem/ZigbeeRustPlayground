@@ -16,12 +16,12 @@ mod parse_serialize;
 mod ieee802154;
 mod radio_bridge;
 
-use bytes::{BufMut, Bytes, IntoBuf};
-use ieee802154::*;
-use ieee802154::mac::frame::Frame as MACFrame;
-use ieee802154::mac::frame::Command as MACCommand;
-use ieee802154::mac::frame::FrameType as MACFrameType;
+use bytes::{Bytes, IntoBuf};
 use ieee802154::mac::frame::AddressSpecification as MACAddressSpecification;
+use ieee802154::mac::frame::Command as MACCommand;
+use ieee802154::mac::frame::Frame as MACFrame;
+use ieee802154::mac::frame::FrameType as MACFrameType;
+use ieee802154::*;
 use parse_serialize::{ParseFromBuf, SerializeToBuf};
 use radio_bridge::service::{BoxServiceFuture, RadioBridgeService};
 use std::ops::Deref;

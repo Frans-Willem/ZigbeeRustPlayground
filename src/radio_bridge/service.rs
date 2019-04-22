@@ -241,10 +241,30 @@ impl RadioBridgeService {
     default_param_get_set!(RadioParam::RxMode, RadioRxMode, get_rx_mode, set_rx_mode);
 
     default_param_get_set!(RadioParam::TxPower, u16, get_tx_power, set_tx_power);
-    default_param_get_set!(RadioParam::ChannelMin, u16, get_channel_min, set_channel_min);
-    default_param_get_set!(RadioParam::ChannelMax, u16, get_channel_max, set_channel_max);
-    default_param_get_set!(RadioParam::TxPowerMin, u16, get_tx_power_min, set_tx_power_min);
-    default_param_get_set!(RadioParam::TxPowerMax, u16, get_tx_power_max, set_tx_power_max);
+    default_param_get_set!(
+        RadioParam::ChannelMin,
+        u16,
+        get_channel_min,
+        set_channel_min
+    );
+    default_param_get_set!(
+        RadioParam::ChannelMax,
+        u16,
+        get_channel_max,
+        set_channel_max
+    );
+    default_param_get_set!(
+        RadioParam::TxPowerMin,
+        u16,
+        get_tx_power_min,
+        set_tx_power_min
+    );
+    default_param_get_set!(
+        RadioParam::TxPowerMax,
+        u16,
+        get_tx_power_max,
+        set_tx_power_max
+    );
 
     pub fn send(&self, data: Bytes) -> BoxServiceFuture<()> {
         Box::new(

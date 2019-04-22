@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, Bytes, IntoBuf};
+use bytes::{Buf, BufMut, Bytes};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -71,19 +71,22 @@ default_impl!(i64, get_i64_le, put_i64_le);
 #[macro_export]
 macro_rules! default_parse_serialize_newtype {
     ($t:ident, $i:ident) => {
-        impl ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut bytes::Buf) -> ParseResult<$t> {
+        impl $crate::parse_serialize::ParseFromBuf for $t {
+            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::ParseResult<$t> {
                 Ok($t($i::parse_from_buf(buf)?))
             }
         }
-        impl SerializeToBuf for $t {
+        impl $crate::parse_serialize::SerializeToBuf for $t {
             fn expected_size(&self) -> usize {
                 match self {
                     $t(inner) => inner.expected_size(),
                 }
             }
 
-            fn serialize_to_buf(&self, buf: &mut bytes::BufMut) -> SerializeResult {
+            fn serialize_to_buf(
+                &self,
+                buf: &mut bytes::BufMut,
+            ) -> $crate::parse_serialize::SerializeResult {
                 match self {
                     $t(inner) => inner.serialize_to_buf(buf),
                 }

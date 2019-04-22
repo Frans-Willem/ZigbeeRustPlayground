@@ -1,8 +1,13 @@
+use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::parse_serialize::{
+    ParseError, ParseFromBuf, ParseFromBufTagged, ParseResult, SerializeError, SerializeResult,
+    SerializeToBuf, SerializeToBufTagged,
+};
 use bitfield::bitfield;
-use crate::ieee802154::{ShortAddress,ExtendedAddress,PANID};
-use crate::parse_serialize::{ParseError, ParseFromBuf, ParseFromBufTagged, ParseResult,SerializeError,SerializeResult, SerializeToBuf, SerializeToBufTagged};
+#[cfg(test)]
+use bytes::IntoBuf;
+use bytes::{Buf, BufMut, Bytes};
 use std::convert::{TryFrom, TryInto};
-use bytes::{Bytes, Buf, BufMut};
 
 bitfield! {
     pub struct FrameControl(u16);
@@ -429,6 +434,7 @@ fn test_parse_mac_frame() {
     assert_eq!(
         parsed,
         Frame {
+            acknowledge_request: false,
             sequence_number: Some(165),
             destination_pan: Some(PANID(0xFFFF)),
             destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
@@ -449,6 +455,7 @@ fn test_parse_mac_frame() {
     assert_eq!(
         parsed,
         Frame {
+            acknowledge_request: false,
             sequence_number: Some(1),
             destination_pan: Some(PANID(0x7698)),
             destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
@@ -468,6 +475,7 @@ fn test_parse_mac_frame() {
     assert_eq!(
         parsed,
         Frame {
+            acknowledge_request: false,
             sequence_number: Some(64),
             source_pan: Some(PANID(0x7698)),
             source: AddressSpecification::Short(ShortAddress(0)),
@@ -524,6 +532,7 @@ impl SerializeToBuf for Frame {
 #[test]
 fn test_serialize_mac_frame() {
     let input = Frame {
+        acknowledge_request: false,
         sequence_number: Some(64),
         destination_pan: None,
         destination: AddressSpecification::None,
