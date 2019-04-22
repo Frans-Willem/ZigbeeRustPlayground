@@ -18,6 +18,10 @@ mod radio_bridge;
 
 use bytes::{BufMut, Bytes, IntoBuf};
 use ieee802154::*;
+use ieee802154::mac::frame::Frame as MACFrame;
+use ieee802154::mac::frame::Command as MACCommand;
+use ieee802154::mac::frame::FrameType as MACFrameType;
+use ieee802154::mac::frame::AddressSpecification as MACAddressSpecification;
 use parse_serialize::{ParseFromBuf, SerializeToBuf};
 use radio_bridge::service::{BoxServiceFuture, RadioBridgeService};
 use std::ops::Deref;
@@ -25,7 +29,7 @@ use std::sync::Arc;
 use tokio::prelude::{Future, Stream};
 use tokio_core::reactor::{Core, Handle};
 
-fn on_mac_frame(frame: ieee802154::mac::frame::MACFrame, handle: &Handle, service: &RadioBridgeService) {
+fn on_mac_frame(frame: MACFrame, handle: &Handle, service: &RadioBridgeService) {
     println!("== PARSED: {:?}", frame);
     if let Some(acknowledge) = frame.create_ack() {
         let mut buf = vec![];
@@ -41,16 +45,16 @@ fn on_mac_frame(frame: ieee802154::mac::frame::MACFrame, handle: &Handle, servic
         );
     }
     match frame.frame_type {
-        ieee802154::mac::frame::MACFrameType::Command(ieee802154::mac::frame::MACCommand::BeaconRequest) => {
+        MACFrameType::Command(MACCommand::BeaconRequest) => {
             println!("Beacon request?");
-            let response = mac::frame::MACFrame {
+            let response = MACFrame {
                 acknowledge_request: false,
                 sequence_number: Some(64),
                 destination_pan: None,
-                destination: ieee802154::mac::frame::AddressSpecification::None,
+                destination: MACAddressSpecification::None,
                 source_pan: PANID(0x7698).into(),
                 source: ShortAddress(0).into(),
-                frame_type: ieee802154::mac::frame::MACFrameType::Beacon {
+                frame_type: MACFrameType::Beacon {
                     beacon_order: 15,
                     superframe_order: 15,
                     final_cap_slot: 15,
@@ -80,7 +84,7 @@ fn on_mac_frame(frame: ieee802154::mac::frame::MACFrame, handle: &Handle, servic
 }
 
 fn on_packet(packet: Bytes, handle: &Handle, service: &RadioBridgeService) {
-    match ieee802154::mac::frame::MACFrame::parse_from_buf(&mut packet.clone().into_buf()) {
+    match MACFrame::parse_from_buf(&mut packet.clone().into_buf()) {
         Ok(x) => on_mac_frame(x, handle, service),
         Err(e) => println!("!! {:?}, {:?}", packet, e),
     }

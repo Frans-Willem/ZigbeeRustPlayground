@@ -172,14 +172,14 @@ default_parse_serialize_newtype!(SuperframeSpecification, u16);
 
 #[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
 #[TryFromPrimitiveType = "u8"]
-pub enum MACDeviceType {
+pub enum DeviceType {
     RFD = 0, // Reduced function device
     FFD = 1, // Full functioning device
 }
 
 #[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
 #[TryFromPrimitiveType = "u8"]
-pub enum MACPowerSource {
+pub enum PowerSource {
     Battery = 0, // Not AC powered
     Powered = 1, // AC powered
 }
@@ -210,12 +210,12 @@ bitfield! {
 default_parse_serialize_newtype!(AssociationRequest, u8);
 
 #[derive(Debug, PartialEq)]
-pub enum MACCommand {
+pub enum Command {
     AssociationRequest {
         /* 0x01 */
         alternate_pan_coordinator: bool,
-        device_type: MACDeviceType,
-        power_source: MACPowerSource,
+        device_type: DeviceType,
+        power_source: PowerSource,
         receive_on_when_idle: bool,
         security_capability: bool,
         allocate_address: bool,
@@ -229,13 +229,13 @@ pub enum MACCommand {
     BeaconRequest, /* 0x07 */
 }
 
-impl ParseFromBuf for MACCommand {
-    fn parse_from_buf(buf: &mut Buf) -> Result<MACCommand, ParseError> {
+impl ParseFromBuf for Command {
+    fn parse_from_buf(buf: &mut Buf) -> Result<Command, ParseError> {
         let command_id = u8::parse_from_buf(buf)?;
         match command_id {
             1 => {
                 let bf = AssociationRequest::parse_from_buf(buf)?;
-                Ok(MACCommand::AssociationRequest {
+                Ok(Command::AssociationRequest {
                     alternate_pan_coordinator: bf.alternate_pan_coordinator() > 0,
                     device_type: bf.device_type().try_into().unwrap(),
                     power_source: bf.power_source().try_into().unwrap(),
@@ -247,20 +247,20 @@ impl ParseFromBuf for MACCommand {
             2 => {
                 let short_address = ShortAddress::parse_from_buf(buf)?;
                 let status = AssociationResponseStatus::parse_from_buf(buf)?;
-                Ok(MACCommand::AssociationResponse {
+                Ok(Command::AssociationResponse {
                     short_address,
                     status,
                 })
             }
-            4 => Ok(MACCommand::DataRequest),
-            7 => Ok(MACCommand::BeaconRequest),
-            _ => Err(ParseError::Unimplemented("MACCommand not implemented")),
+            4 => Ok(Command::DataRequest),
+            7 => Ok(Command::BeaconRequest),
+            _ => Err(ParseError::Unimplemented("Command not implemented")),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub enum MACFrameType {
+pub enum FrameType {
     Beacon {
         beacon_order: usize,
         superframe_order: usize,
@@ -271,15 +271,15 @@ pub enum MACFrameType {
     },
     Data,
     Ack,
-    Command(MACCommand),
+    Command(Command),
     Reserved,
     Multipurpose,
     Fragment,
     Extended,
 }
 
-impl ParseFromBufTagged<u16> for MACFrameType {
-    fn parse_from_buf(frame_type: u16, buf: &mut Buf) -> Result<MACFrameType, ParseError> {
+impl ParseFromBufTagged<u16> for FrameType {
+    fn parse_from_buf(frame_type: u16, buf: &mut Buf) -> Result<FrameType, ParseError> {
         match frame_type {
             0 => {
                 let superframe_spec = SuperframeSpecification::parse_from_buf(buf)?;
@@ -290,7 +290,7 @@ impl ParseFromBufTagged<u16> for MACFrameType {
                         "Beacon frame, GTS or pending addresses not empty",
                     ))
                 } else {
-                    Ok(MACFrameType::Beacon {
+                    Ok(FrameType::Beacon {
                         beacon_order: superframe_spec.beacon_order() as usize,
                         superframe_order: superframe_spec.superframe_order() as usize,
                         final_cap_slot: superframe_spec.final_cap_slot() as usize,
@@ -300,10 +300,10 @@ impl ParseFromBufTagged<u16> for MACFrameType {
                     })
                 }
             }
-            1 => Ok(MACFrameType::Data),
-            2 => Ok(MACFrameType::Ack),
-            3 => Ok(MACFrameType::Command(MACCommand::parse_from_buf(buf)?)),
-            4 => Ok(MACFrameType::Reserved),
+            1 => Ok(FrameType::Data),
+            2 => Ok(FrameType::Ack),
+            3 => Ok(FrameType::Command(Command::parse_from_buf(buf)?)),
+            4 => Ok(FrameType::Reserved),
             _ => Err(if frame_type > 7 {
                 ParseError::UnexpectedData
             } else {
@@ -313,10 +313,10 @@ impl ParseFromBufTagged<u16> for MACFrameType {
     }
 }
 
-impl SerializeToBuf for MACFrameType {
+impl SerializeToBuf for FrameType {
     fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
         match self {
-            MACFrameType::Beacon {
+            FrameType::Beacon {
                 beacon_order,
                 superframe_order,
                 final_cap_slot,
@@ -350,40 +350,40 @@ impl SerializeToBuf for MACFrameType {
                 (0 as u8).serialize_to_buf(buf)?;
                 Ok(())
             }
-            MACFrameType::Data => Ok(()),
-            MACFrameType::Ack => Ok(()),
+            FrameType::Data => Ok(()),
+            FrameType::Ack => Ok(()),
             _ => Err(SerializeError::Unimplemented),
         }
     }
 }
 
-impl SerializeToBufTagged<u16> for MACFrameType {
+impl SerializeToBufTagged<u16> for FrameType {
     fn get_serialize_tag(&self) -> Result<u16, SerializeError> {
         match self {
-            MACFrameType::Beacon { .. } => Ok(0),
-            MACFrameType::Data => Ok(1),
-            MACFrameType::Ack => Ok(2),
-            MACFrameType::Command(_) => Ok(3),
-            MACFrameType::Reserved => Ok(4),
+            FrameType::Beacon { .. } => Ok(0),
+            FrameType::Data => Ok(1),
+            FrameType::Ack => Ok(2),
+            FrameType::Command(_) => Ok(3),
+            FrameType::Reserved => Ok(4),
             _ => Err(SerializeError::Unimplemented),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct MACFrame {
+pub struct Frame {
     pub acknowledge_request: bool,
     pub sequence_number: Option<u8>,
     pub destination_pan: Option<PANID>,
     pub destination: AddressSpecification,
     pub source_pan: Option<PANID>,
     pub source: AddressSpecification,
-    pub frame_type: MACFrameType,
+    pub frame_type: FrameType,
     pub payload: Bytes,
 }
 
-impl ParseFromBuf for MACFrame {
-    fn parse_from_buf(buf: &mut Buf) -> Result<MACFrame, ParseError> {
+impl ParseFromBuf for Frame {
+    fn parse_from_buf(buf: &mut Buf) -> Result<Frame, ParseError> {
         let fsf = FrameControl::parse_from_buf(buf)?;
         let acknowledge_request = fsf.acknowledge_request() > 0;
         let sequence_number = if fsf.sequence_number_supression() != 0 {
@@ -406,9 +406,9 @@ impl ParseFromBuf for MACFrame {
             Some(PANID::parse_from_buf(buf)?)
         };
         let source = AddressSpecification::parse_from_buf(fsf.source_addressing_mode(), buf)?;
-        let frame_type = MACFrameType::parse_from_buf(fsf.frame_type(), buf)?;
+        let frame_type = FrameType::parse_from_buf(fsf.frame_type(), buf)?;
         let payload = buf.collect();
-        Ok(MACFrame {
+        Ok(Frame {
             acknowledge_request,
             sequence_number,
             destination_pan,
@@ -425,16 +425,16 @@ impl ParseFromBuf for MACFrame {
 fn test_parse_mac_frame() {
     // Beacon request
     let input: [u8; 8] = [0x03, 0x08, 0xa5, 0xFF, 0xFF, 0xFF, 0xFF, 0x07];
-    let parsed = MACFrame::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = Frame::parse_from_buf(&mut input.into_buf()).unwrap();
     assert_eq!(
         parsed,
-        MACFrame {
+        Frame {
             sequence_number: Some(165),
             destination_pan: Some(PANID(0xFFFF)),
             destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
             source_pan: None,
             source: AddressSpecification::None,
-            frame_type: MACFrameType::Command(MACCommand::BeaconRequest),
+            frame_type: FrameType::Command(Command::BeaconRequest),
             payload: Bytes::new()
         }
     );
@@ -445,16 +445,16 @@ fn test_parse_mac_frame() {
         0x01, 0x13, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x28, 0x02, 0x00, 0x00, 0x00, 0x15,
         0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0x00, 0x71, 0x50, 0x83, 0x72, 0x0c, 0xe4,
     ];
-    let parsed = MACFrame::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = Frame::parse_from_buf(&mut input.into_buf()).unwrap();
     assert_eq!(
         parsed,
-        MACFrame {
+        Frame {
             sequence_number: Some(1),
             destination_pan: Some(PANID(0x7698)),
             destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
             source_pan: Some(PANID(0x7698)),
             source: AddressSpecification::Short(ShortAddress(0)),
-            frame_type: MACFrameType::Data,
+            frame_type: FrameType::Data,
             payload: Bytes::from(&input[9..])
         }
     );
@@ -464,16 +464,16 @@ fn test_parse_mac_frame() {
         0x00, 0x80, 0x40, 0x98, 0x76, 0x00, 0x00, 0xff, 0xcf, 0x00, 0x00, 0x00, 0x22, 0x84, 0x15,
         0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xff, 0xff, 0xff, 0x00,
     ];
-    let parsed = MACFrame::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = Frame::parse_from_buf(&mut input.into_buf()).unwrap();
     assert_eq!(
         parsed,
-        MACFrame {
+        Frame {
             sequence_number: Some(64),
             source_pan: Some(PANID(0x7698)),
             source: AddressSpecification::Short(ShortAddress(0)),
             destination_pan: None,
             destination: AddressSpecification::None,
-            frame_type: MACFrameType::Beacon {
+            frame_type: FrameType::Beacon {
                 beacon_order: 15,
                 superframe_order: 15,
                 final_cap_slot: 15,
@@ -486,7 +486,7 @@ fn test_parse_mac_frame() {
     );
 }
 
-impl SerializeToBuf for MACFrame {
+impl SerializeToBuf for Frame {
     fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
         let mut fsf = FrameControl(0);
         fsf.set_frame_type(self.frame_type.get_serialize_tag()?);
@@ -523,13 +523,13 @@ impl SerializeToBuf for MACFrame {
 
 #[test]
 fn test_serialize_mac_frame() {
-    let input = MACFrame {
+    let input = Frame {
         sequence_number: Some(64),
         destination_pan: None,
         destination: AddressSpecification::None,
         source_pan: PANID(0x7698).into(),
         source: ShortAddress(0).into(),
-        frame_type: MACFrameType::Beacon {
+        frame_type: FrameType::Beacon {
             beacon_order: 15,
             superframe_order: 15,
             final_cap_slot: 15,
@@ -550,19 +550,19 @@ fn test_serialize_mac_frame() {
     );
 }
 
-impl MACFrame {
-    pub fn create_ack(&self) -> Option<MACFrame> {
+impl Frame {
+    pub fn create_ack(&self) -> Option<Frame> {
         if !self.acknowledge_request {
             None
         } else {
-            Some(MACFrame {
+            Some(Frame {
                 acknowledge_request: false,
                 sequence_number: self.sequence_number,
                 destination_pan: None,
                 destination: AddressSpecification::None,
                 source_pan: None,
                 source: AddressSpecification::None,
-                frame_type: MACFrameType::Ack,
+                frame_type: FrameType::Ack,
                 payload: Bytes::new(),
             })
         }
