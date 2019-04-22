@@ -1,12 +1,5 @@
 pub mod mac;
 
-/*
-use crate::parse_serialize::{
-    ParseFromBuf, ParseFromBufTagged, ParseResult, SerializeResult,
-    SerializeToBuf,
-};
-*/
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShortAddress(pub u16);
 default_parse_serialize_newtype!(ShortAddress, u16);

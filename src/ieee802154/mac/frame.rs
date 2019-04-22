@@ -1,7 +1,8 @@
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::parse_serialize::Error as ParseError;
+use crate::parse_serialize::Result as ParseResult;
 use crate::parse_serialize::{
-    ParseError, ParseFromBuf, ParseFromBufTagged, ParseResult, SerializeError, SerializeResult,
-    SerializeToBuf, SerializeToBufTagged,
+    ParseFromBuf, ParseFromBufTagged, SerializeToBuf, SerializeToBufTagged,
 };
 use bitfield::bitfield;
 #[cfg(test)]
@@ -114,7 +115,7 @@ impl ParseFromBufTagged<u16> for AddressSpecification {
 }
 
 impl SerializeToBuf for AddressSpecification {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
         match self {
             AddressSpecification::None => Ok(()),
             AddressSpecification::Reserved => Ok(()),
@@ -125,7 +126,7 @@ impl SerializeToBuf for AddressSpecification {
 }
 
 impl SerializeToBufTagged<u16> for AddressSpecification {
-    fn get_serialize_tag(&self) -> Result<u16, SerializeError> {
+    fn get_serialize_tag(&self) -> Result<u16, ParseError> {
         Ok(match self {
             AddressSpecification::None => 0,
             AddressSpecification::Reserved => 1,
@@ -319,7 +320,7 @@ impl ParseFromBufTagged<u16> for FrameType {
 }
 
 impl SerializeToBuf for FrameType {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
         match self {
             FrameType::Beacon {
                 beacon_order,
@@ -334,17 +335,17 @@ impl SerializeToBuf for FrameType {
                 ss.set_beacon_order(
                     (*beacon_order)
                         .try_into()
-                        .map_err(|_| SerializeError::Unimplemented)?,
+                        .map_err(|_| ParseError::Unimplemented("Beacon order is too big"))?,
                 );
                 ss.set_superframe_order(
                     (*superframe_order)
                         .try_into()
-                        .map_err(|_| SerializeError::Unimplemented)?,
+                        .map_err(|_| ParseError::Unimplemented("Superframe order is too big"))?,
                 );
                 ss.set_final_cap_slot(
                     (*final_cap_slot)
                         .try_into()
-                        .map_err(|_| SerializeError::Unimplemented)?,
+                        .map_err(|_| ParseError::Unimplemented("Final cap slot is too big"))?,
                 );
                 ss.set_battery_life_extension((*battery_life_extension).into());
                 ss.set_reserved(0);
@@ -357,20 +358,20 @@ impl SerializeToBuf for FrameType {
             }
             FrameType::Data => Ok(()),
             FrameType::Ack => Ok(()),
-            _ => Err(SerializeError::Unimplemented),
+            _ => Err(ParseError::Unimplemented("Frametype not implemented")),
         }
     }
 }
 
 impl SerializeToBufTagged<u16> for FrameType {
-    fn get_serialize_tag(&self) -> Result<u16, SerializeError> {
+    fn get_serialize_tag(&self) -> Result<u16, ParseError> {
         match self {
             FrameType::Beacon { .. } => Ok(0),
             FrameType::Data => Ok(1),
             FrameType::Ack => Ok(2),
             FrameType::Command(_) => Ok(3),
             FrameType::Reserved => Ok(4),
-            _ => Err(SerializeError::Unimplemented),
+            _ => Err(ParseError::Unimplemented("FrameType not implemented")),
         }
     }
 }
@@ -495,7 +496,7 @@ fn test_parse_mac_frame() {
 }
 
 impl SerializeToBuf for Frame {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
         let mut fsf = FrameControl(0);
         fsf.set_frame_type(self.frame_type.get_serialize_tag()?);
         fsf.set_security_enabled(0);

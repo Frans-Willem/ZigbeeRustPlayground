@@ -1,35 +1,29 @@
 use bytes::{Buf, BufMut, Bytes};
 
 #[derive(Debug)]
-pub enum ParseError {
+pub enum Error {
     InsufficientData,
     UnexpectedData,
     Unimplemented(&'static str),
 }
-pub type ParseResult<T> = Result<T, ParseError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait ParseFromBuf: Sized {
-    fn parse_from_buf(buf: &mut Buf) -> ParseResult<Self>;
+    fn parse_from_buf(buf: &mut Buf) -> Result<Self>;
 }
-
-#[derive(Debug)]
-pub enum SerializeError {
-    Unimplemented,
-}
-pub type SerializeResult = Result<(), SerializeError>;
 
 pub trait SerializeToBuf {
     fn expected_size(&self) -> usize {
         return 0;
     }
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult;
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> Result<()>;
 }
 
 impl SerializeToBuf for Bytes {
     fn expected_size(&self) -> usize {
         self.len()
     }
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> Result<()> {
         BufMut::put_slice(buf, self);
         Ok(())
     }
@@ -39,11 +33,11 @@ impl SerializeToBuf for Bytes {
 macro_rules! default_impl {
     ($t:ty, $get:ident, $put:ident) => {
         impl ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut Buf) -> ParseResult<$t> {
+            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
                 if buf.remaining() < std::mem::size_of::<$t>() {
-                    Err(ParseError::InsufficientData)
+                    std::result::Result::Err($crate::parse_serialize::Error::InsufficientData)
                 } else {
-                    Ok(buf.$get())
+                    std::result::Result::Ok(buf.$get())
                 }
             }
         }
@@ -51,9 +45,9 @@ macro_rules! default_impl {
             fn expected_size(&self) -> usize {
                 return std::mem::size_of::<$t>();
             }
-            fn serialize_to_buf(&self, buf: &mut BufMut) -> SerializeResult {
+            fn serialize_to_buf(&self, buf: &mut BufMut) -> $crate::parse_serialize::Result<()> {
                 buf.$put(self.clone());
-                Ok(())
+                std::result::Result::Ok(())
             }
         }
     };
@@ -72,8 +66,8 @@ default_impl!(i64, get_i64_le, put_i64_le);
 macro_rules! default_parse_serialize_newtype {
     ($t:ident, $i:ident) => {
         impl $crate::parse_serialize::ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::ParseResult<$t> {
-                Ok($t($i::parse_from_buf(buf)?))
+            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
+                std::result::Result::Ok($t($i::parse_from_buf(buf)?))
             }
         }
         impl $crate::parse_serialize::SerializeToBuf for $t {
@@ -86,7 +80,7 @@ macro_rules! default_parse_serialize_newtype {
             fn serialize_to_buf(
                 &self,
                 buf: &mut bytes::BufMut,
-            ) -> $crate::parse_serialize::SerializeResult {
+            ) -> $crate::parse_serialize::Result<()> {
                 match self {
                     $t(inner) => inner.serialize_to_buf(buf),
                 }
@@ -98,17 +92,20 @@ macro_rules! default_parse_serialize_newtype {
 #[macro_export]
 macro_rules! default_parse_serialize_enum {
     ($t:ident, $i:ident) => {
-        impl ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut bytes::Buf) -> ParseResult<$t> {
+        impl $crate::parse_serialize::ParseFromBuf for $t {
+            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
                 $t::try_from($i::parse_from_buf(buf)?).map_err(|_| ParseError::UnexpectedData)
             }
         }
-        impl SerializeToBuf for $t {
+        impl $crate::parse_serialize::SerializeToBuf for $t {
             fn expected_size(&self) -> usize {
                 // If you encounter errors here, be sure to derive Copy and Clone!
                 (*self as $i).expected_size()
             }
-            fn serialize_to_buf(&self, buf: &mut bytes::BufMut) -> SerializeResult {
+            fn serialize_to_buf(
+                &self,
+                buf: &mut bytes::BufMut,
+            ) -> $crate::parse_serialize::Result<()> {
                 (*self as $i).serialize_to_buf(buf)
             }
         }
@@ -116,9 +113,9 @@ macro_rules! default_parse_serialize_enum {
 }
 
 pub trait ParseFromBufTagged<T>: Sized {
-    fn parse_from_buf(tag: T, buf: &mut Buf) -> ParseResult<Self>;
+    fn parse_from_buf(tag: T, buf: &mut Buf) -> Result<Self>;
 }
 
 pub trait SerializeToBufTagged<T>: SerializeToBuf {
-    fn get_serialize_tag(&self) -> Result<T, SerializeError>;
+    fn get_serialize_tag(&self) -> Result<T>;
 }
