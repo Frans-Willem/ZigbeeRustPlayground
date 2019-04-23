@@ -13,6 +13,8 @@ extern crate enum_tryfrom;
 
 #[macro_use]
 mod parse_serialize;
+mod ackmap;
+mod cachemap;
 mod ieee802154;
 mod radio_bridge;
 
