@@ -90,7 +90,7 @@ fn test_frame_control_serialize() {
     assert_eq!(buf, input);
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum AddressSpecification {
     None,
     Reserved,
@@ -176,21 +176,21 @@ bitfield! {
 }
 default_parse_serialize_newtype!(SuperframeSpecification, u16);
 
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
 #[TryFromPrimitiveType = "u8"]
 pub enum DeviceType {
     RFD = 0, // Reduced function device
     FFD = 1, // Full functioning device
 }
 
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
 #[TryFromPrimitiveType = "u8"]
 pub enum PowerSource {
     Battery = 0, // Not AC powered
     Powered = 1, // AC powered
 }
 
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
 #[TryFromPrimitiveType = "u8"]
 pub enum AssociationResponseStatus {
     AssociationSuccessful = 0,
@@ -215,7 +215,7 @@ bitfield! {
 }
 default_parse_serialize_newtype!(AssociationRequest, u8);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Command {
     AssociationRequest {
         /* 0x01 */
@@ -265,7 +265,7 @@ impl ParseFromBuf for Command {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum FrameType {
     Beacon {
         beacon_order: usize,
@@ -376,7 +376,7 @@ impl SerializeToBufTagged<u16> for FrameType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Frame {
     pub acknowledge_request: bool,
     pub sequence_number: Option<u8>,

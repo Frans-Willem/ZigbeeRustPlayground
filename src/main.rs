@@ -10,6 +10,8 @@ extern crate tokio_sync;
 #[macro_use]
 extern crate enum_tryfrom_derive;
 extern crate enum_tryfrom;
+#[macro_use]
+extern crate futures;
 
 #[macro_use]
 mod parse_serialize;
@@ -18,7 +20,7 @@ mod cachemap;
 mod ieee802154;
 mod radio_bridge;
 
-use bytes::{Bytes, IntoBuf};
+use bytes::{Buf, Bytes, IntoBuf};
 use ieee802154::mac::frame::AddressSpecification as MACAddressSpecification;
 use ieee802154::mac::frame::Command as MACCommand;
 use ieee802154::mac::frame::Frame as MACFrame;
@@ -86,8 +88,12 @@ fn on_mac_frame(frame: MACFrame, handle: &Handle, service: &RadioBridgeService) 
 }
 
 fn on_packet(packet: Bytes, handle: &Handle, service: &RadioBridgeService) {
-    match MACFrame::parse_from_buf(&mut packet.clone().into_buf()) {
-        Ok(x) => on_mac_frame(x, handle, service),
+    let mut buf = packet.clone().into_buf();
+    match MACFrame::parse_from_buf(&mut buf) {
+        Ok(x) => {
+            println!("Bytes left {}", buf.remaining());
+            on_mac_frame(x, handle, service);
+        }
         Err(e) => println!("!! {:?}, {:?}", packet, e),
     }
 }

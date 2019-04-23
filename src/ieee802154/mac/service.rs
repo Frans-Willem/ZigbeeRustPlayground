@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use tokio_core::reactor::Handle;
 
+use crate::cachemap::CacheMap;
 use crate::parse_serialize::Error as ParseError;
 use crate::radio_bridge::service::Error as RadioError;
 use crate::radio_bridge::service::IncomingPacket as RadioPacket;
@@ -20,6 +21,7 @@ struct InnerService {
     radio: RadioService,
     event_sink: mpsc::UnboundedSender<Event>,
     sequence_number: Mutex<u8>,
+    seen_messages: CacheMap<Frame, ()>,
 }
 
 pub struct Service {
@@ -59,6 +61,7 @@ impl InnerService {
                 radio,
                 event_sink: sender,
                 sequence_number: Mutex::new(0),
+                seen_messages: CacheMap::new(handle.clone()),
             },
             receiver,
         )
@@ -75,13 +78,20 @@ impl InnerService {
     }
 
     fn on_incoming_frame(&self, frame: Frame, _rssi: u8, _link_quality: u8) {
-        println!("<< {:?}", frame);
-        match frame.frame_type {
-            FrameType::Command(Command::BeaconRequest) => {
-                println!("Got a beacon requets :)");
-                self.push_event(Event::BeaconRequest())
+        if let Some(_) =
+            self.seen_messages
+                .insert(frame.clone(), (), std::time::Duration::from_secs(2))
+        {
+            println!("Duplicate frame received!");
+        } else {
+            println!("<< {:?}", frame);
+            match frame.frame_type {
+                FrameType::Command(Command::BeaconRequest) => {
+                    println!("Got a beacon requets :)");
+                    self.push_event(Event::BeaconRequest())
+                }
+                _ => println!("Unhandled"),
             }
-            _ => println!("Unhandled"),
         }
     }
 
