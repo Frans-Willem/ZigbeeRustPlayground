@@ -139,25 +139,26 @@ impl RadioBridgeService {
         let mut request_data = BytesMut::new();
         request_data.put_u16_be(radio_param as u16);
         request_data.put_u16_be(expected_size as u16);
-        let data = self.inner.call(raw_service::Request {
-            command_id: raw_service::RequestCommand::RadioGetObject,
-            data: request_data.freeze(),
-        });
-        async move {
-            let mut data = await!(data)?.into_buf();
-            if data.remaining() < 2 {
-                Err(Error::UnexpectedResponseSize)
-            } else {
-                let retval = data.get_u16_be();
-                if retval != 0 {
-                    Err(Error::ErrorCode(retval as usize))
-                } else if data.remaining() < expected_size {
+        self.inner
+            .call(raw_service::Request {
+                command_id: raw_service::RequestCommand::RadioGetObject,
+                data: request_data.freeze(),
+            })
+            .map(move |data| {
+                let mut data = data?.into_buf();
+                if data.remaining() < 2 {
                     Err(Error::UnexpectedResponseSize)
                 } else {
-                    Ok(Bytes::from_buf(data))
+                    let retval = data.get_u16_be();
+                    if retval != 0 {
+                        Err(Error::ErrorCode(retval as usize))
+                    } else if data.remaining() < expected_size {
+                        Err(Error::UnexpectedResponseSize)
+                    } else {
+                        Ok(Bytes::from_buf(data))
+                    }
                 }
-            }
-        }
+            })
     }
 
     pub fn get_long_address(&self) -> impl Future<Output = Result<u64, Error>> {
@@ -171,25 +172,26 @@ impl RadioBridgeService {
     {
         let mut request_data = BytesMut::new();
         request_data.put_u16_be(radio_param as u16);
-        let retval = self.inner.call(raw_service::Request {
-            command_id: raw_service::RequestCommand::RadioGetValue,
-            data: request_data.freeze(),
-        });
-        async move {
-            let mut data = await!(retval)?.into_buf();
-            if data.remaining() < 2 {
-                Err(Error::UnexpectedResponseSize)
-            } else {
-                let retval = data.get_u16_be();
-                if retval != 0 {
-                    Err(Error::ErrorCode(retval as usize))
-                } else if data.remaining() < 2 {
+        self.inner
+            .call(raw_service::Request {
+                command_id: raw_service::RequestCommand::RadioGetValue,
+                data: request_data.freeze(),
+            })
+            .map(move |data| {
+                let mut data = data?.into_buf();
+                if data.remaining() < 2 {
                     Err(Error::UnexpectedResponseSize)
                 } else {
-                    T::from_radio_value(data.get_u16_be())
+                    let retval = data.get_u16_be();
+                    if retval != 0 {
+                        Err(Error::ErrorCode(retval as usize))
+                    } else if data.remaining() < 2 {
+                        Err(Error::UnexpectedResponseSize)
+                    } else {
+                        T::from_radio_value(data.get_u16_be())
+                    }
                 }
-            }
-        }
+            })
     }
 
     fn set_value<T>(&self, radio_param: RadioParam, value: &T) -> RetTryFuture<(), Error>
