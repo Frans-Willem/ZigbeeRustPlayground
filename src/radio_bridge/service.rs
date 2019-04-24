@@ -44,6 +44,12 @@ pub enum Error {
     Unsupported,
 }
 
+impl From<raw_service::Error> for Error {
+    fn from(err: raw_service::Error) -> Self {
+        Error::RawError(err)
+    }
+}
+
 trait FromToRadioValue: Sized {
     fn to_radio_value(&self) -> Result<u16, Error>;
     fn from_radio_value(value: u16) -> Result<Self, Error>;
@@ -125,75 +131,65 @@ impl RadioBridgeService {
         (RadioBridgeService { inner: raw_service }, packet_stream)
     }
 
-    fn get_object(&self, radio_param: RadioParam, expected_size: usize) -> RetServiceFuture<Bytes> {
+    fn get_object(
+        &self,
+        radio_param: RadioParam,
+        expected_size: usize,
+    ) -> impl Future<Output = Result<Bytes, Error>> {
         let mut request_data = BytesMut::new();
         request_data.put_u16_be(radio_param as u16);
         request_data.put_u16_be(expected_size as u16);
-        return_try_future(
-            self.inner
-                .call(raw_service::Request {
-                    command_id: raw_service::RequestCommand::RadioGetObject,
-                    data: request_data.freeze(),
-                })
-                .map_err(|e| Error::RawError(e))
-                .and_then(move |data| {
-                    if data.len() < 2 {
-                        future::err(Error::UnexpectedResponseSize)
-                    } else {
-                        let mut data = data.into_buf();
-                        let retval = data.get_u16_be();
-                        if retval == 0 {
-                            if data.remaining() < expected_size {
-                                future::err(Error::UnexpectedResponseSize)
-                            } else {
-                                future::ok(Bytes::from_buf(data))
-                            }
-                        } else {
-                            future::err(Error::ErrorCode(retval as usize))
-                        }
-                    }
-                }),
-        )
+        let data = self.inner.call(raw_service::Request {
+            command_id: raw_service::RequestCommand::RadioGetObject,
+            data: request_data.freeze(),
+        });
+        async move {
+            let mut data = await!(data)?.into_buf();
+            if data.remaining() < 2 {
+                Err(Error::UnexpectedResponseSize)
+            } else {
+                let retval = data.get_u16_be();
+                if retval != 0 {
+                    Err(Error::ErrorCode(retval as usize))
+                } else if data.remaining() < expected_size {
+                    Err(Error::UnexpectedResponseSize)
+                } else {
+                    Ok(Bytes::from_buf(data))
+                }
+            }
+        }
     }
 
-    pub fn get_long_address(&self) -> RetServiceFuture<u64> {
-        return_future(
-            self.get_object(RadioParam::LongAddress, std::mem::size_of::<u64>())
-                .map_ok(|data| data.into_buf().get_u64_be()),
-        )
+    pub fn get_long_address(&self) -> impl Future<Output = Result<u64, Error>> {
+        self.get_object(RadioParam::LongAddress, std::mem::size_of::<u64>())
+            .map_ok(|data| data.into_buf().get_u64_be())
     }
 
-    fn get_value<T>(&self, radio_param: RadioParam) -> RetServiceFuture<T>
+    fn get_value<T>(&self, radio_param: RadioParam) -> impl Future<Output = Result<T, Error>>
     where
         T: FromToRadioValue + Send + 'static,
     {
         let mut request_data = BytesMut::new();
         request_data.put_u16_be(radio_param as u16);
-        let retval = self
-            .inner
-            .call(raw_service::Request {
-                command_id: raw_service::RequestCommand::RadioGetValue,
-                data: request_data.freeze(),
-            })
-            .map_err(|e| Error::RawError(e))
-            .and_then(|data| {
-                if data.len() < 2 {
-                    future::err(Error::UnexpectedResponseSize)
+        let retval = self.inner.call(raw_service::Request {
+            command_id: raw_service::RequestCommand::RadioGetValue,
+            data: request_data.freeze(),
+        });
+        async move {
+            let mut data = await!(retval)?.into_buf();
+            if data.remaining() < 2 {
+                Err(Error::UnexpectedResponseSize)
+            } else {
+                let retval = data.get_u16_be();
+                if retval != 0 {
+                    Err(Error::ErrorCode(retval as usize))
+                } else if data.remaining() < 2 {
+                    Err(Error::UnexpectedResponseSize)
                 } else {
-                    let mut data = data.into_buf();
-                    let retval = data.get_u16_be();
-                    if retval == 0 {
-                        if data.remaining() < 2 {
-                            future::err(Error::UnexpectedResponseSize)
-                        } else {
-                            future::ok(data.get_u16_be())
-                        }
-                    } else {
-                        future::err(Error::ErrorCode(retval as usize))
-                    }
+                    T::from_radio_value(data.get_u16_be())
                 }
-            });
-        return_future(retval.and_then(|x| future::ready(T::from_radio_value(x))))
+            }
+        }
     }
 
     fn set_value<T>(&self, radio_param: RadioParam, value: &T) -> RetTryFuture<(), Error>

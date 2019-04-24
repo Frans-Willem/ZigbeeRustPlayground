@@ -21,8 +21,8 @@ mod ret_future;
 //mod radio_bridge;
 //
 use futures::compat::*;
-use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use futures::task::{Spawn, SpawnExt};
+use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use tokio::codec::Decoder;
 use tokio::prelude::Future as _;
 use tokio::prelude::Stream as _;
@@ -102,13 +102,19 @@ async fn play_with_service(service: radio_bridge::service::RadioBridgeService) {
     let extended_address = await!(service.get_long_address()).unwrap();
     println!("Extended address: {:X}", extended_address);
     println!("Turning on");
-    await!(service.on());
-    println!("Min channel: {}", await!(service.get_channel_min()).unwrap());
-    println!("Max channel: {}", await!(service.get_channel_max()).unwrap());
+    await!(service.on()).unwrap();
+    println!(
+        "Min channel: {}",
+        await!(service.get_channel_min()).unwrap()
+    );
+    println!(
+        "Max channel: {}",
+        await!(service.get_channel_max()).unwrap()
+    );
 }
 
 fn main() {
-    let mut rt = Runtime::new().unwrap();
+    let rt = Runtime::new().unwrap();
     let mut spawner = MySpawner(rt.executor());
     let settings = tokio_serial::SerialPortSettings::default();
     let port = tokio_serial::Serial::from_path("/dev/ttyACM0", &settings).unwrap();
@@ -120,9 +126,10 @@ fn main() {
     */
     let output_sink = Box::new(output_sink.sink_compat());
     let output_stream = Box::new(output_stream.compat());
-    let (raw_service, incoming_packets) = radio_bridge::service::RadioBridgeService::new(output_sink, output_stream, &mut spawner);
+    let (raw_service, _incoming_packets) =
+        radio_bridge::service::RadioBridgeService::new(output_sink, output_stream, &mut spawner);
 
-    spawner.spawn(play_with_service(raw_service));
+    spawner.spawn(play_with_service(raw_service)).unwrap();
 
     rt.shutdown_on_idle().wait().unwrap();
 }
