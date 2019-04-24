@@ -1,15 +1,18 @@
 use bytes::Bytes;
-use futures::sync::{mpsc, oneshot};
-use futures::{Future, Sink, Stream};
+use futures::channel::{mpsc, oneshot};
+use futures::task::{Spawn, SpawnExt};
+use futures::{
+    Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStream, TryStreamExt,
+};
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
 use tokio::codec::Decoder;
-use tokio_core::reactor::Handle;
+use tokio::reactor::Handle;
 use tokio_serial::Serial;
-use tokio_service::Service;
 
 use crate::radio_bridge::serial_protocol;
+use crate::ret_future::*;
 
 pub enum RequestCommand {
     RadioPrepare = 0,
@@ -47,7 +50,7 @@ impl Dispatcher {
             in_flight: HashMap::new(),
         }
     }
-    fn new_request(&mut self) -> (u16, Box<Future<Item = Bytes, Error = Error>>) {
+    fn new_request(&mut self) -> (u16, impl Future<Output = Result<Bytes, Error>>) {
         let request_id = self.next_available_request_id;
         self.next_available_request_id = self.next_available_request_id + 1;
         let (sender, receiver) = oneshot::channel::<Result<Bytes, Error>>();
@@ -55,7 +58,11 @@ impl Dispatcher {
         self.in_flight.insert(request_id, sender);
         (
             request_id,
-            Box::new(receiver.map_err(|e| Error::OneshotError(e)).and_then(|e| e)),
+            return_try_future(
+                receiver
+                    .map_err(|e| Error::OneshotError(e))
+                    .and_then(futures::future::ready),
+            ),
         )
     }
     fn resolve(&mut self, request_id: u16, data: Bytes) {
@@ -90,16 +97,14 @@ fn handle_incoming_command(
     cmd: serial_protocol::Command,
     dispatcher: &Arc<RwLock<Dispatcher>>,
     packet_output: &mpsc::UnboundedSender<IncomingPacket>,
-) -> Result<(), ()> {
+) {
     if cmd.command_id == 0x80 {
         dispatcher
             .write()
             .unwrap()
             .resolve(cmd.request_id, cmd.data);
-        Ok(())
     } else if cmd.command_id == 0x81 {
         dispatcher.write().unwrap().reject(cmd.request_id, cmd.data);
-        Ok(())
     } else if cmd.command_id == 0xC0 {
         if cmd.data.len() > 2 {
             packet_output
@@ -108,14 +113,12 @@ fn handle_incoming_command(
                     rssi: cmd.data[cmd.data.len() - 2],
                     link_quality: cmd.data[cmd.data.len() - 1],
                 })
-                .map_err(|e| eprintln!("{:?}", e))
+                .unwrap();
         } else {
             eprintln!("Packet received without postfix");
-            Ok(())
         }
     } else {
         eprintln!("Unexpected command received: {}", cmd.command_id as usize);
-        Ok(())
     }
 }
 
@@ -126,28 +129,46 @@ pub struct RadioBridgeService {
 
 impl RadioBridgeService {
     pub fn new(
-        port: Serial,
-        handle: Handle,
+        serial_output: Box<Sink<serial_protocol::Command, SinkError = io::Error> + Unpin + Send>,
+        serial_input: Box<
+            Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
+        >,
+        handle: &mut Spawn,
     ) -> (RadioBridgeService, mpsc::UnboundedReceiver<IncomingPacket>) {
-        let (output_sink, output_stream) = serial_protocol::Codec::new().framed(port).split();
-        let (command_sink, receiver) = mpsc::unbounded::<serial_protocol::Command>();
+        let (command_sink, mut outgoing_command_stream) =
+            mpsc::unbounded::<serial_protocol::Command>();
         let (packet_output, packet_stream) = mpsc::unbounded::<IncomingPacket>();
-        handle.spawn(
-            output_sink
-                .sink_map_err(|e| SinkError::IO(e))
-                .send_all(receiver.map_err(|_| SinkError::Unknown))
-                .map_err(|e| println!("{:?}", e))
-                .map(|_| ()),
-        );
+        let mut serial_output = serial_output;
+        /*
+        // Debug code
+        let mut outgoing_command_stream = outgoing_command_stream.map(|item| {
+            eprintln!("Serial output: {:?}", item);
+            item
+        });
+        let serial_input = serial_input.map(|item| {
+            eprintln!("Serial input: {:?}", item);
+            item
+        });
+        // End Debug code
+        */
+        handle
+            .spawn(async move {
+                await!(serial_output.send_all(&mut outgoing_command_stream)).unwrap();
+            })
+            .unwrap();
         let dispatcher = Arc::new(RwLock::new(Dispatcher::new()));
         let dispatcher_clone = dispatcher.clone();
-        handle.spawn(
-            output_stream
-                .map_err(|e| println!("{:?}", e))
-                .for_each(move |cmd| {
-                    handle_incoming_command(cmd, &dispatcher_clone, &packet_output)
-                }),
-        );
+        handle
+            .spawn(async move {
+                await!(serial_input.for_each(move |res| {
+                    match res {
+                        Ok(cmd) => handle_incoming_command(cmd, &dispatcher_clone, &packet_output),
+                        Err(e) => eprintln!("Serial input error: {:?}", e),
+                    }
+                    futures::future::ready(())
+                }));
+            })
+            .unwrap();
         (
             RadioBridgeService {
                 dispatcher: dispatcher,
@@ -156,15 +177,8 @@ impl RadioBridgeService {
             packet_stream,
         )
     }
-}
 
-impl Service for RadioBridgeService {
-    type Request = Request;
-    type Response = Bytes;
-    type Error = Error;
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
-
-    fn call(&self, request: Self::Request) -> Self::Future {
+    pub fn call(&self, request: Request) -> impl Future<Output = Result<Bytes, Error>> {
         let (request_id, result) = self.dispatcher.write().unwrap().new_request();
         self.command_sink
             .unbounded_send(serial_protocol::Command {

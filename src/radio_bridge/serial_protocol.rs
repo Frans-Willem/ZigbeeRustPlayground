@@ -1,7 +1,8 @@
 use bytes::{BigEndian, BufMut, ByteOrder, Bytes, BytesMut};
 use std::io;
-use tokio_io::codec::{Decoder, Encoder};
+use tokio::codec::{Decoder, Encoder};
 
+#[derive(Debug)]
 pub struct Command {
     pub command_id: u8,
     pub request_id: u16,

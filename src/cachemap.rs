@@ -1,30 +1,34 @@
-use futures::{task::Task, Async, Future, Poll, Stream};
+use crate::delayqueue::DelayQueue;
+use crate::delayqueue::Error as DelayQueueError;
+use crate::delayqueue::Key as DelayQueueKey;
+use futures::{Stream, Future, FutureExt};
+use futures::task::{Context, Poll, Spawn, SpawnExt};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use tokio::timer::delay_queue::Key as DelayQueueKey;
-use tokio::timer::DelayQueue;
+use std::pin::Pin;
+use std::ops::DerefMut;
+use std::marker::Send;
 
 #[derive(Debug)]
 pub enum Error {
-    TimerError(tokio::timer::Error),
-    CacheMapDropped,
+    DelayQueueError(DelayQueueError),
 }
 
-impl From<tokio::timer::Error> for Error {
-    fn from(timer_err: tokio::timer::Error) -> Error {
-        Error::TimerError(timer_err)
+impl From<DelayQueueError> for Error {
+    fn from(err: DelayQueueError) -> Error {
+        Error::DelayQueueError(err)
     }
 }
 
 struct CacheMapInternal<K, V> {
     entries: HashMap<K, (V, DelayQueueKey)>,
     expirations: DelayQueue<K>,
-    expirations_kicker: Option<Task>,
-    dropped: bool,
 }
+
+impl<K,V> Unpin for CacheMapInternal<K,V> {}
 
 impl<K, V> CacheMapInternal<K, V>
 where
@@ -35,14 +39,11 @@ where
         CacheMapInternal {
             entries: HashMap::new(),
             expirations: DelayQueue::new(),
-            expirations_kicker: None,
-            dropped: false,
         }
     }
 
     fn insert(&mut self, key: K, value: V, ttl: Duration) -> Option<V> {
         let delay = self.expirations.insert(key.clone(), ttl);
-        self.kick_expirations();
         if let Some((old_value, old_delay)) = self.entries.insert(key, (value, delay)) {
             self.expirations.remove(&old_delay);
             println!("Cachemap replaced, new size {}", self.entries.len());
@@ -64,67 +65,58 @@ where
         })
     }
 
-    fn poll(&mut self) -> Poll<(), Error> {
-        if self.dropped {
-            Ok(Async::Ready(()))
-        } else {
-            while let Some(entry) = try_ready!(self.expirations.poll()) {
-                self.entries.remove(entry.get_ref());
-                println!("Cachemap dropped, new size {}", self.entries.len());
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
+            while let Some(res) = ready!(std::pin::Pin::new(&mut self.expirations).poll_next(cx)) {
+                match res {
+                    Ok(entry) => {
+                        self.entries.remove(entry.get_ref());
+                        println!("Cachemap dropped, new size {}", self.entries.len());
+                    },
+                    Err(e) => {
+                        eprintln!("DelayQueue error: {:?}", e);
+                    }
+                }
             }
-            self.expirations_kicker = Some(futures::task::current());
-            Ok(Async::NotReady)
-        }
-    }
-}
-
-impl<K, V> CacheMapInternal<K, V> {
-    fn user_dropped(&mut self) {
-        self.dropped = true;
-        self.expirations.clear();
-        self.kick_expirations()
-    }
-    fn kick_expirations(&mut self) {
-        if let Some(task) = self.expirations_kicker.take() {
-            task.notify();
-        }
+            Poll::Ready(Ok(()))
     }
 }
 
 pub struct CacheMap<K, V> {
-    inner: Rc<Mutex<CacheMapInternal<K, V>>>,
+    inner: Arc<Mutex<CacheMapInternal<K, V>>>,
 }
 
-struct CacheMapPollMe<K, V>(Rc<Mutex<CacheMapInternal<K, V>>>);
+struct CacheMapPollMe<K, V>(Arc<Mutex<CacheMapInternal<K, V>>>);
 
 impl<K, V> Future for CacheMapPollMe<K, V>
 where
     K: Clone + Eq + Hash,
     V: Clone,
 {
-    type Item = ();
-    type Error = Error;
+    type Output = Result<(), Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let CacheMapPollMe(internal) = self;
-        internal.lock().unwrap().poll()
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let mut guard = self.0.lock().unwrap();
+        let pinned = std::pin::Pin::new(guard.deref_mut());
+        pinned.poll(cx)
     }
 }
 
 impl<K, V> CacheMap<K, V>
 where
-    K: Hash,
-    K: std::cmp::Eq,
-    K: std::clone::Clone,
-    V: std::clone::Clone,
+    K: Hash + Eq + Clone + Send,
+    V: Clone + Send,
     K: 'static,
     V: 'static,
 {
-    pub fn new(handle: tokio_core::reactor::Handle) -> Self {
+    pub fn new(handle: Box<Spawn>) -> Self {
         let inner = CacheMapInternal::new();
-        let inner = Rc::new(Mutex::new(inner));
+        let inner = Arc::new(Mutex::new(inner));
         let pollme = CacheMapPollMe(inner.clone());
-        let pollme = pollme.map_err(|e| eprintln!("CacheMap error: {:?}", e));
+        let pollme = pollme.map(|res| {
+            if let Err(e) = res {
+                eprintln!("CacheMap error: {:?}", e)
+            }
+        });
         handle.spawn(pollme);
         CacheMap { inner }
     }
@@ -132,8 +124,8 @@ where
 
 impl<K, V> CacheMap<K, V>
 where
-    K: Hash + Eq + Clone,
-    V: Clone,
+    K: Hash + Eq + Clone + Send,
+    V: Clone + Send,
 {
     pub fn insert(&self, key: K, value: V, ttl: Duration) -> Option<V> {
         self.inner.lock().unwrap().insert(key, value, ttl)
@@ -148,7 +140,6 @@ where
 
 impl<K, V> Drop for CacheMap<K, V> {
     fn drop(&mut self) {
-        let mut guard = self.inner.lock().unwrap();
-        guard.user_dropped()
+        self.inner.lock().unwrap().expirations.end();
     }
 }

@@ -1,15 +1,16 @@
 use crate::radio_bridge::raw_service;
 pub use crate::radio_bridge::raw_service::IncomingPacket;
+use crate::radio_bridge::serial_protocol;
+use crate::ret_future::*;
 use bytes::{buf::FromBuf, buf::IntoBuf, Buf, BufMut, Bytes, BytesMut};
-use futures::future::result;
-use futures::sync::mpsc;
-use futures::Future;
-use tokio_core::reactor::Handle;
-use tokio_serial::Serial;
-use tokio_service::Service;
+use futures::channel::mpsc;
+use futures::future;
+use futures::task::Spawn;
+use futures::{Future, FutureExt, Sink, Stream, TryFuture, TryFutureExt};
+use std::io;
+use std::pin::Pin;
 
-pub type ServiceFuture<T> = Future<Item = T, Error = Error>;
-pub type BoxServiceFuture<T> = Box<ServiceFuture<T>>;
+pub type RetServiceFuture<T> = RetTryFuture<T, Error>;
 
 pub struct RadioBridgeService {
     inner: raw_service::RadioBridgeService,
@@ -102,10 +103,10 @@ impl FromToRadioValue for RadioRxMode {
 
 macro_rules! default_param_get_set{
     ($param:expr, $t:ty, $get:ident, $set:ident) => {
-        pub fn $get(&self) -> BoxServiceFuture<$t> {
+        pub fn $get(&self) -> impl Future<Output=Result<$t, Error>>{
             self.get_value($param)
         }
-        pub fn $set(&self, value: $t) -> BoxServiceFuture<()> {
+        pub fn $set(&self, value: $t) -> impl Future<Output=Result<(),Error>> {
             self.set_value($param, &value)
         }
     }
@@ -113,18 +114,22 @@ macro_rules! default_param_get_set{
 
 impl RadioBridgeService {
     pub fn new(
-        port: Serial,
-        handle: Handle,
+        serial_output: Box<Sink<serial_protocol::Command, SinkError = io::Error> + Unpin + Send>,
+        serial_input: Box<
+            Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
+        >,
+        handle: &mut Spawn,
     ) -> (RadioBridgeService, mpsc::UnboundedReceiver<IncomingPacket>) {
-        let (raw_service, packet_stream) = raw_service::RadioBridgeService::new(port, handle);
+        let (raw_service, packet_stream) =
+            raw_service::RadioBridgeService::new(serial_output, serial_input, handle);
         (RadioBridgeService { inner: raw_service }, packet_stream)
     }
 
-    fn get_object(&self, radio_param: RadioParam, expected_size: usize) -> BoxServiceFuture<Bytes> {
+    fn get_object(&self, radio_param: RadioParam, expected_size: usize) -> RetServiceFuture<Bytes> {
         let mut request_data = BytesMut::new();
         request_data.put_u16_be(radio_param as u16);
         request_data.put_u16_be(expected_size as u16);
-        Box::new(
+        return_try_future(
             self.inner
                 .call(raw_service::Request {
                     command_id: raw_service::RequestCommand::RadioGetObject,
@@ -133,35 +138,34 @@ impl RadioBridgeService {
                 .map_err(|e| Error::RawError(e))
                 .and_then(move |data| {
                     if data.len() < 2 {
-                        Err(Error::UnexpectedResponseSize)
+                        future::err(Error::UnexpectedResponseSize)
                     } else {
                         let mut data = data.into_buf();
                         let retval = data.get_u16_be();
                         if retval == 0 {
                             if data.remaining() < expected_size {
-                                Err(Error::UnexpectedResponseSize)
+                                future::err(Error::UnexpectedResponseSize)
                             } else {
-                                Ok(Bytes::from_buf(data))
+                                future::ok(Bytes::from_buf(data))
                             }
                         } else {
-                            Err(Error::ErrorCode(retval as usize))
+                            future::err(Error::ErrorCode(retval as usize))
                         }
                     }
                 }),
         )
     }
 
-    pub fn get_long_address(&self) -> BoxServiceFuture<u64> {
-        Box::new(
+    pub fn get_long_address(&self) -> RetServiceFuture<u64> {
+        return_future(
             self.get_object(RadioParam::LongAddress, std::mem::size_of::<u64>())
-                .map(|data| data.into_buf().get_u64_be()),
+                .map_ok(|data| data.into_buf().get_u64_be()),
         )
     }
 
-    fn get_value<T>(&self, radio_param: RadioParam) -> BoxServiceFuture<T>
+    fn get_value<T>(&self, radio_param: RadioParam) -> RetServiceFuture<T>
     where
-        T: FromToRadioValue,
-        T: 'static,
+        T: FromToRadioValue + Send + 'static,
     {
         let mut request_data = BytesMut::new();
         request_data.put_u16_be(radio_param as u16);
@@ -174,26 +178,25 @@ impl RadioBridgeService {
             .map_err(|e| Error::RawError(e))
             .and_then(|data| {
                 if data.len() < 2 {
-                    Err(Error::UnexpectedResponseSize)
+                    future::err(Error::UnexpectedResponseSize)
                 } else {
                     let mut data = data.into_buf();
                     let retval = data.get_u16_be();
                     if retval == 0 {
                         if data.remaining() < 2 {
-                            Err(Error::UnexpectedResponseSize)
+                            future::err(Error::UnexpectedResponseSize)
                         } else {
-                            Ok(data.get_u16_be())
+                            future::ok(data.get_u16_be())
                         }
                     } else {
-                        Err(Error::ErrorCode(retval as usize))
+                        future::err(Error::ErrorCode(retval as usize))
                     }
                 }
             });
-        let retval = retval.and_then(move |x| T::from_radio_value(x));
-        Box::new(retval)
+        return_future(retval.and_then(|x| future::ready(T::from_radio_value(x))))
     }
 
-    fn set_value<T>(&self, radio_param: RadioParam, value: &T) -> BoxServiceFuture<()>
+    fn set_value<T>(&self, radio_param: RadioParam, value: &T) -> RetTryFuture<(), Error>
     where
         T: FromToRadioValue,
         T: 'static,
@@ -212,20 +215,20 @@ impl RadioBridgeService {
                         .map_err(|e| Error::RawError(e))
                         .and_then(|data| {
                             if data.len() < 2 {
-                                Err(Error::UnexpectedResponseSize)
+                                future::err(Error::UnexpectedResponseSize)
                             } else {
                                 let mut data = data.into_buf();
                                 let retval = data.get_u16_be();
                                 if retval == 0 {
-                                    Ok(())
+                                    future::ok(())
                                 } else {
-                                    Err(Error::ErrorCode(retval as usize))
+                                    future::err(Error::ErrorCode(retval as usize))
                                 }
                             }
                         }),
                 )
             }
-            Err(x) => Box::new(result(Err(x))),
+            Err(x) => Box::new(future::err(x)),
         }
     }
 
@@ -266,7 +269,7 @@ impl RadioBridgeService {
         set_tx_power_max
     );
 
-    pub fn send(&self, data: Bytes) -> BoxServiceFuture<()> {
+    pub fn send(&self, data: Bytes) -> RetServiceFuture<()> {
         Box::new(
             self.inner
                 .call(raw_service::Request {
@@ -276,21 +279,21 @@ impl RadioBridgeService {
                 .map_err(|e| Error::RawError(e))
                 .and_then(|data| {
                     if data.len() < 2 {
-                        Err(Error::UnexpectedResponseSize)
+                        future::err(Error::UnexpectedResponseSize)
                     } else {
                         let mut data = data.into_buf();
                         let retval = data.get_u16_be();
                         if retval == 0 {
-                            Ok(())
+                            future::ok(())
                         } else {
-                            Err(Error::ErrorCode(retval as usize))
+                            future::err(Error::ErrorCode(retval as usize))
                         }
                     }
                 }),
         )
     }
 
-    pub fn on(&self) -> BoxServiceFuture<()> {
+    pub fn on(&self) -> RetServiceFuture<()> {
         Box::new(
             self.inner
                 .call(raw_service::Request {
@@ -300,14 +303,14 @@ impl RadioBridgeService {
                 .map_err(|e| Error::RawError(e))
                 .and_then(|data| {
                     if data.len() < 2 {
-                        Err(Error::UnexpectedResponseSize)
+                        future::err(Error::UnexpectedResponseSize)
                     } else {
                         let mut data = data.into_buf();
                         let retval = data.get_u16_be();
                         if retval == 1 {
-                            Ok(())
+                            future::ok(())
                         } else {
-                            Err(Error::ErrorCode(retval as usize))
+                            future::err(Error::ErrorCode(retval as usize))
                         }
                     }
                 }),

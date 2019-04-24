@@ -6,13 +6,9 @@ edition = "2018"
 
 [dependencies]
 tokio-serial = "3.2"
-tokio-io = "0.1"
-tokio-service = "0.1"
-tokio-sync = "0.1"
-tokio-core = "0.1"
 tokio = "0.1"
 bytes = "0.4"
-futures = "0.1"
+futures-preview = {version = "0.3.0-alpha.14", features=["compat"]}
 bitfield = "0.13"
 enum-tryfrom = "0.2"
 enum-tryfrom-derive = "0.2"
