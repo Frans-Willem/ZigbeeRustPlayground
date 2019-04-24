@@ -31,6 +31,7 @@ pub struct Service {
     extended_address: ExtendedAddress,
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub enum Event {
     BeaconRequest(),
 }
@@ -49,7 +50,7 @@ impl From<RadioError> for Error {
 
 type Future<T> = futures::Future<Item = T, Error = Error>;
 type BoxFuture<T> = Box<Future<T>>;
-type Stream<T> = futures::Stream<Item = T, Error = Error>;
+type Stream<T> = futures::Stream<Item = T, Error = ()>;
 type BoxStream<T> = Box<Stream<T>>;
 
 impl InnerService {
@@ -122,7 +123,7 @@ impl Service {
     pub fn new(
         handle: Handle,
         radio: RadioService,
-        packetstream: Box<futures::Stream<Item = RadioPacket, Error = RadioError>>,
+        packetstream: Box<futures::Stream<Item = RadioPacket, Error = ()>>,
         channel: u16,
         short_address: ShortAddress,
         pan_id: PANID,
@@ -162,7 +163,7 @@ impl Service {
                     short_address,
                     extended_address: ExtendedAddress(extended_address),
                 },
-                Box::new(events.map_err(|_| Error::MPSCError)) as BoxStream<Event>,
+                Box::new(events) as BoxStream<Event>,
             )
         });
         let service = service.map_err(|e| Error::RadioError(e));

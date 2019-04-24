@@ -20,91 +20,26 @@ mod cachemap;
 mod ieee802154;
 mod radio_bridge;
 
-use bytes::{Buf, Bytes, IntoBuf};
-use ieee802154::mac::frame::AddressSpecification as MACAddressSpecification;
-use ieee802154::mac::frame::Command as MACCommand;
-use ieee802154::mac::frame::Frame as MACFrame;
-use ieee802154::mac::frame::FrameType as MACFrameType;
-use ieee802154::*;
-use parse_serialize::{ParseFromBuf, SerializeToBuf};
-use radio_bridge::service::{BoxServiceFuture, RadioBridgeService};
-use std::ops::Deref;
-use std::sync::Arc;
+use bytes::Bytes;
+use ieee802154::mac::service::Event as MACEvent;
+use ieee802154::mac::service::Service as MACService;
 use tokio::prelude::{Future, Stream};
 use tokio_core::reactor::{Core, Handle};
 
-fn on_mac_frame(frame: MACFrame, handle: &Handle, service: &RadioBridgeService) {
-    println!("== PARSED: {:?}", frame);
-    if let Some(acknowledge) = frame.create_ack() {
-        let mut buf = vec![];
-        acknowledge.serialize_to_buf(&mut buf).unwrap();
-        handle.spawn(
-            service
-                .send(buf.into())
-                .and_then(|_| {
-                    println!("Ack sent");
-                    Ok(())
-                })
-                .map_err(|e| eprintln!("Send ACK error: {:?}", e)),
-        );
-    }
-    match frame.frame_type {
-        MACFrameType::Command(MACCommand::BeaconRequest) => {
-            println!("Beacon request?");
-            let response = MACFrame {
-                acknowledge_request: false,
-                sequence_number: Some(64),
-                destination_pan: None,
-                destination: MACAddressSpecification::None,
-                source_pan: PANID(0x7698).into(),
-                source: ShortAddress(0).into(),
-                frame_type: MACFrameType::Beacon {
-                    beacon_order: 15,
-                    superframe_order: 15,
-                    final_cap_slot: 15,
-                    battery_life_extension: false,
-                    pan_coordinator: true,
-                    association_permit: true,
-                },
-                payload: Bytes::from(
-                    &b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00"[..],
-                ),
-            };
-            let mut buf = vec![];
-            response.serialize_to_buf(&mut buf).unwrap();
-            println!("Beacon response: {:?}", buf);
-            handle.spawn(
-                service
-                    .send(buf.into())
-                    .and_then(|_| {
-                        println!("Sent!");
-                        Ok(())
-                    })
-                    .map_err(|err| eprintln!("Send error: {:?}", err)),
-            );
+fn on_mac_event(handle: &Handle, service: &MACService, event: MACEvent) -> Result<(), ()> {
+    eprintln!("MAC event: {:?}", event);
+    match event {
+        MACEvent::BeaconRequest() => {
+            let payload =
+                Bytes::from(&b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00"[..]);
+            println!("Sending beacon!");
+            handle.spawn(service.send_beacon(payload).then(|res| {
+                println!("Sent beacon: {:?}", res);
+                Ok(())
+            }));
         }
-        _ => (),
     }
-}
-
-fn on_packet(packet: Bytes, handle: &Handle, service: &RadioBridgeService) {
-    let mut buf = packet.clone().into_buf();
-    match MACFrame::parse_from_buf(&mut buf) {
-        Ok(x) => {
-            println!("Bytes left {}", buf.remaining());
-            on_mac_frame(x, handle, service);
-        }
-        Err(e) => println!("!! {:?}, {:?}", packet, e),
-    }
-}
-
-fn set_max_power(service: &Arc<RadioBridgeService>) -> BoxServiceFuture<()> {
-    let service_copy = service.clone();
-    Box::new(
-        service
-            .get_tx_power_max()
-            .and_then(move |max_power| service_copy.set_tx_power(max_power)),
-    )
+    Ok(())
 }
 
 fn main() {
@@ -114,29 +49,21 @@ fn main() {
 
     let (service, packet_stream) =
         radio_bridge::service::RadioBridgeService::new(port, core.handle());
-    let service = Arc::new(service);
 
-    let packet_service = service.clone();
-    let packet_handle = core.handle();
-    let packet_handler = packet_stream
-        .for_each(move |pkt| {
-            on_packet(pkt.packet, &packet_handle, packet_service.deref());
-            Ok(())
-        })
-        .map_err(|e| eprintln!("{:?}", e));
+    let service = MACService::new(
+        core.handle(),
+        service,
+        Box::new(packet_stream),
+        25,
+        ieee802154::ShortAddress(0),
+        ieee802154::PANID(12345),
+    );
 
-    let setup_response = service
-        .set_channel(25)
-        .join(service.set_rx_mode(radio_bridge::service::RadioRxMode {
-            address_filter: false,
-            autoack: false,
-            poll_mode: false,
-        }))
-        .join(service.on())
-        .join(set_max_power(&service))
-        .and_then(|_| Ok(println!("Setup complete")))
-        .map_err(|e| eprintln!("{:?}", e));
-    core.handle().spawn(setup_response);
+    let handle = core.handle();
+    let service = service.map_err(|e| eprintln!("Unable to start MAC service: {:?}", e));
+    let service = service.and_then(move |(macservice, macevents)| {
+        macevents.for_each(move |event| on_mac_event(&handle, &macservice, event))
+    });
 
-    core.run(packet_handler).unwrap();
+    core.run(service).unwrap();
 }
