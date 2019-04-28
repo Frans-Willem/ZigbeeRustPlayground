@@ -12,16 +12,14 @@ extern crate futures;
 
 #[macro_use]
 mod parse_serialize;
-mod delayqueue;
-//mod ackmap;
 mod cachemap;
+mod delayqueue;
 mod ieee802154;
 mod radio_bridge;
-mod ret_future;
 use futures::compat::*;
 
 use futures::task::{Spawn, SpawnExt};
-use futures::{Future, FutureExt, SinkExt, StreamExt, TryFuture, TryFutureExt};
+use futures::{FutureExt, StreamExt, TryFutureExt};
 use ieee802154::mac::service::Event as MACEvent;
 use ieee802154::mac::service::Service as MACService;
 use tokio::codec::Decoder;
@@ -31,7 +29,7 @@ use tokio::runtime::Runtime;
 
 use bytes::Bytes;
 
-pub trait CloneSpawn: futures::task::Spawn + Send + Sync {
+pub trait CloneSpawn: Spawn + Send + Sync {
     fn clone(&self) -> Box<CloneSpawn>;
 }
 
@@ -56,38 +54,10 @@ fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &MACService, event: MACEv
         }
     }
 }
-/*
-
-fn main() {
-    let settings = tokio_serial::SerialPortSettings::default();
-    let port = tokio_serial::Serial::from_path("/dev/ttyACM0", &settings).unwrap();
-    let mut core = Core::new().unwrap();
-
-    let (service, packet_stream) =
-        radio_bridge::service::RadioBridgeService::new(port, core.handle());
-
-    let service = MACService::new(
-        core.handle(),
-        service,
-        Box::new(packet_stream),
-        25,
-        ieee802154::ShortAddress(0),
-        ieee802154::PANID(12345),
-    );
-
-    let handle = core.handle();
-    let service = service.map_err(|e| eprintln!("Unable to start MAC service: {:?}", e));
-    let service = service.and_then(move |(macservice, macevents)| {
-        macevents.for_each(move |event| on_mac_event(&handle, &macservice, event))
-    });
-
-    core.run(service).unwrap();
-}
-*/
 
 struct MySpawner(tokio::runtime::TaskExecutor);
 
-impl futures::task::Spawn for MySpawner {
+impl Spawn for MySpawner {
     fn spawn_obj(
         &mut self,
         fut: futures::future::FutureObj<'static, ()>,

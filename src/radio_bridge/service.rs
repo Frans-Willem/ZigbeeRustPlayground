@@ -1,15 +1,12 @@
 use crate::radio_bridge::raw_service;
 pub use crate::radio_bridge::raw_service::IncomingPacket;
 use crate::radio_bridge::serial_protocol;
-use crate::ret_future::*;
 use bytes::{buf::FromBuf, buf::IntoBuf, Buf, BufMut, Bytes, BytesMut};
 use futures::channel::mpsc;
 use futures::future;
 use futures::task::Spawn;
 use futures::{Future, FutureExt, Sink, Stream, TryFutureExt};
 use std::io;
-
-pub type RetServiceFuture<T> = RetTryFuture<T, Error>;
 
 pub struct RadioBridgeService {
     inner: raw_service::RadioBridgeService,
@@ -193,7 +190,11 @@ impl RadioBridgeService {
             })
     }
 
-    fn set_value<T>(&self, radio_param: RadioParam, value: &T) -> RetTryFuture<(), Error>
+    fn set_value<T>(
+        &self,
+        radio_param: RadioParam,
+        value: &T,
+    ) -> impl Future<Output = Result<(), Error>>
     where
         T: FromToRadioValue,
         T: 'static,
@@ -225,7 +226,9 @@ impl RadioBridgeService {
                         }),
                 )
             }
-            Err(x) => Box::new(future::err(x)),
+            Err(x) => {
+                Box::new(future::err(x)) as Box<Future<Output = Result<(), Error>> + Send + Unpin>
+            }
         }
     }
 
@@ -266,7 +269,7 @@ impl RadioBridgeService {
         set_tx_power_max
     );
 
-    pub fn send(&self, data: Bytes) -> RetServiceFuture<()> {
+    pub fn send(&self, data: Bytes) -> impl Future<Output = Result<(), Error>> {
         Box::new(
             self.inner
                 .call(raw_service::Request {
@@ -290,7 +293,7 @@ impl RadioBridgeService {
         )
     }
 
-    pub fn on(&self) -> RetServiceFuture<()> {
+    pub fn on(&self) -> impl Future<Output = Result<(), Error>> {
         Box::new(
             self.inner
                 .call(raw_service::Request {

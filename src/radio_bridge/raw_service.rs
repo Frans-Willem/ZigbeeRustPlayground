@@ -1,13 +1,12 @@
 use bytes::Bytes;
 use futures::channel::{mpsc, oneshot};
 use futures::task::{Spawn, SpawnExt};
-use futures::{Future, Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{Future, Sink, SinkExt, Stream, StreamExt, TryFutureExt};
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
 
 use crate::radio_bridge::serial_protocol;
-use crate::ret_future::*;
 
 pub enum RequestCommand {
     RadioPrepare = 0,
@@ -53,11 +52,9 @@ impl Dispatcher {
         self.in_flight.insert(request_id, sender);
         (
             request_id,
-            return_try_future(
-                receiver
-                    .map_err(|e| Error::OneshotError(e))
-                    .and_then(futures::future::ready),
-            ),
+            receiver
+                .map_err(|e| Error::OneshotError(e))
+                .and_then(futures::future::ready),
         )
     }
     fn resolve(&mut self, request_id: u16, data: Bytes) {

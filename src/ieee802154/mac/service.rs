@@ -4,14 +4,12 @@ use crate::parse_serialize::{ParseFromBuf, SerializeToBuf};
 use crate::CloneSpawn;
 use bytes::{Bytes, IntoBuf};
 use futures::channel::mpsc;
-use futures::future::Future as _;
-use futures::future::{FutureExt, TryFuture, TryFutureExt};
+use futures::future::{TryFutureExt};
 use futures::stream::Stream;
 use futures::stream::StreamExt;
-use futures::task::{Spawn, SpawnExt};
+use futures::task::{SpawnExt};
 use std::sync::Arc;
 use std::sync::Mutex;
-//use std::pin::{Pin, Unpin};
 
 use crate::cachemap::CacheMap;
 use crate::parse_serialize::Error as ParseError;
