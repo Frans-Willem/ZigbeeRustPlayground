@@ -1,16 +1,17 @@
 use crate::delayqueue::DelayQueue;
 use crate::delayqueue::Error as DelayQueueError;
 use crate::delayqueue::Key as DelayQueueKey;
-use futures::{Stream, Future, FutureExt};
+use crate::CloneSpawn;
 use futures::task::{Context, Poll, Spawn, SpawnExt};
+use futures::{Future, FutureExt, Stream};
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::marker::Send;
+use std::ops::DerefMut;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use std::pin::Pin;
-use std::ops::DerefMut;
-use std::marker::Send;
 
 #[derive(Debug)]
 pub enum Error {
@@ -28,7 +29,7 @@ struct CacheMapInternal<K, V> {
     expirations: DelayQueue<K>,
 }
 
-impl<K,V> Unpin for CacheMapInternal<K,V> {}
+impl<K, V> Unpin for CacheMapInternal<K, V> {}
 
 impl<K, V> CacheMapInternal<K, V>
 where
@@ -66,18 +67,19 @@ where
     }
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-            while let Some(res) = ready!(std::pin::Pin::new(&mut self.expirations).poll_next(cx)) {
-                match res {
-                    Ok(entry) => {
-                        self.entries.remove(entry.get_ref());
-                        println!("Cachemap dropped, new size {}", self.entries.len());
-                    },
-                    Err(e) => {
-                        eprintln!("DelayQueue error: {:?}", e);
-                    }
+        let unpinned = self.get_mut();
+        while let Some(res) = ready!(std::pin::Pin::new(&mut unpinned.expirations).poll_next(cx)) {
+            match res {
+                Ok(entry) => {
+                    unpinned.entries.remove(entry.get_ref());
+                    println!("Cachemap dropped, new size {}", unpinned.entries.len());
+                }
+                Err(e) => {
+                    eprintln!("DelayQueue error: {:?}", e);
                 }
             }
-            Poll::Ready(Ok(()))
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -108,7 +110,7 @@ where
     K: 'static,
     V: 'static,
 {
-    pub fn new(handle: Box<Spawn>) -> Self {
+    pub fn new(handle: Box<CloneSpawn>) -> Self {
         let inner = CacheMapInternal::new();
         let inner = Arc::new(Mutex::new(inner));
         let pollme = CacheMapPollMe(inner.clone());
@@ -117,7 +119,8 @@ where
                 eprintln!("CacheMap error: {:?}", e)
             }
         });
-        handle.spawn(pollme);
+        let mut handle = handle;
+        handle.spawn(pollme).unwrap();
         CacheMap { inner }
     }
 }

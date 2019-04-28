@@ -6,9 +6,8 @@ use bytes::{buf::FromBuf, buf::IntoBuf, Buf, BufMut, Bytes, BytesMut};
 use futures::channel::mpsc;
 use futures::future;
 use futures::task::Spawn;
-use futures::{Future, FutureExt, Sink, Stream, TryFuture, TryFutureExt};
+use futures::{Future, FutureExt, Sink, Stream, TryFutureExt};
 use std::io;
-use std::pin::Pin;
 
 pub type RetServiceFuture<T> = RetTryFuture<T, Error>;
 

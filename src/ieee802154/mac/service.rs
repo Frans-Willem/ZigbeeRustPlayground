@@ -1,13 +1,17 @@
 use crate::ieee802154::mac::frame::*;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::parse_serialize::{ParseFromBuf, SerializeToBuf};
+use crate::CloneSpawn;
 use bytes::{Bytes, IntoBuf};
+use futures::channel::mpsc;
 use futures::future::Future as _;
-use futures::stream::Stream as _;
-use futures::sync::mpsc;
-use std::rc::Rc;
+use futures::future::{FutureExt, TryFuture, TryFutureExt};
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use futures::task::{Spawn, SpawnExt};
+use std::sync::Arc;
 use std::sync::Mutex;
-use tokio_core::reactor::Handle;
+//use std::pin::{Pin, Unpin};
 
 use crate::cachemap::CacheMap;
 use crate::parse_serialize::Error as ParseError;
@@ -17,7 +21,7 @@ use crate::radio_bridge::service::RadioBridgeService as RadioService;
 use crate::radio_bridge::service::RadioRxMode;
 
 struct InnerService {
-    handle: Handle,
+    handle: Box<CloneSpawn>,
     radio: RadioService,
     event_sink: mpsc::UnboundedSender<Event>,
     sequence_number: Mutex<u8>,
@@ -25,7 +29,7 @@ struct InnerService {
 }
 
 pub struct Service {
-    inner: Rc<InnerService>,
+    inner: Arc<InnerService>,
     pan_id: PANID,
     short_address: ShortAddress,
     extended_address: ExtendedAddress,
@@ -48,21 +52,23 @@ impl From<RadioError> for Error {
     }
 }
 
-type Future<T> = futures::Future<Item = T, Error = Error>;
-type BoxFuture<T> = Box<Future<T>>;
-type Stream<T> = futures::Stream<Item = T, Error = ()>;
-type BoxStream<T> = Box<Stream<T>>;
+pub trait Future<T> = futures::Future<Output = Result<T, Error>>;
+//trait Stream<T> = futures::Stream<Item = T>;
 
 impl InnerService {
-    fn new(handle: &Handle, radio: RadioService) -> (InnerService, mpsc::UnboundedReceiver<Event>) {
+    fn new(
+        spawner: Box<CloneSpawn>,
+        radio: RadioService,
+    ) -> (InnerService, mpsc::UnboundedReceiver<Event>) {
         let (sender, receiver) = mpsc::unbounded();
+        let seen_messages = CacheMap::new(spawner.clone());
         (
             InnerService {
-                handle: handle.clone(),
+                handle: spawner,
                 radio,
                 event_sink: sender,
                 sequence_number: Mutex::new(0),
-                seen_messages: CacheMap::new(handle.clone()),
+                seen_messages,
             },
             receiver,
         )
@@ -103,32 +109,36 @@ impl InnerService {
         }
     }
 
-    fn send_raw_frame(&self, frame: Frame) -> BoxFuture<()> {
+    fn send_raw_frame(&self, frame: Frame) -> impl Future<()> {
         // TODO: This should only return if both the send succeeds, and (if required) an Ack was
         // received.
         let mut serialized = vec![];
         if let Err(e) = frame.serialize_to_buf(&mut serialized) {
             Box::new(futures::future::err(Error::SerializationError(e)))
+                as Box<Future<()> + Unpin + Send>
         } else {
             Box::new(
                 self.radio
                     .send(serialized.into())
                     .map_err(Error::RadioError),
-            )
+            ) as Box<Future<()> + Unpin + Send>
         }
     }
 }
 
 impl Service {
     pub fn new(
-        handle: Handle,
+        handle: Box<CloneSpawn>,
         radio: RadioService,
-        packetstream: Box<futures::Stream<Item = RadioPacket, Error = ()>>,
+        packetstream: Box<futures::Stream<Item = RadioPacket> + Unpin + Send>,
         channel: u16,
         short_address: ShortAddress,
         pan_id: PANID,
-    ) -> BoxFuture<(Service, BoxStream<Event>)> {
-        let max_power = radio.get_tx_power_max().map(move |pwr| (pwr, radio));
+    ) -> impl Future<(
+        Service,
+        Box<dyn Stream<Item = Event> + Send + Unpin + 'static>,
+    )> {
+        let max_power = radio.get_tx_power_max().map_ok(move |pwr| (pwr, radio));
         let set_properties = max_power.and_then(move |(max_power, radio)| {
             let f1 = radio.set_tx_power(max_power);
             let f2 = radio.set_channel(channel);
@@ -139,23 +149,24 @@ impl Service {
                 autoack: true,
                 poll_mode: false,
             });
-            f1.join5(f2, f3, f4, f5).map(move |_| radio)
+            futures::future::try_join5(f1, f2, f3, f4, f5).map_ok(move |_| radio)
         });
-        let turn_on = set_properties.and_then(|radio| radio.on().map(move |_| radio));
+        let turn_on = set_properties.and_then(|radio| radio.on().map_ok(move |_| radio));
         let extended_address = turn_on.and_then(|radio| {
             radio
                 .get_long_address()
-                .map(move |extaddr| (extaddr, radio))
+                .map_ok(move |extaddr| (extaddr, radio))
         });
-        let service = extended_address.map(move |(extended_address, radio)| {
-            let (inner, events) = InnerService::new(&handle, radio);
-            let inner = Rc::new(inner);
+        let mut handle = handle;
+        let service = extended_address.map_ok(move |(extended_address, radio)| {
+            let (inner, events) = InnerService::new(handle.clone(), radio);
+            let inner = Arc::new(inner);
             let packet_inner = inner.clone();
-            handle.spawn(
-                packetstream
-                    .for_each(move |packet| Ok(packet_inner.on_incoming_packet(packet)))
-                    .map_err(|e| eprintln!("Radio packet error: {:?}", e)),
-            );
+            handle
+                .spawn(packetstream.for_each(move |packet| {
+                    futures::future::ready(packet_inner.on_incoming_packet(packet))
+                }))
+                .unwrap();
             (
                 Service {
                     inner,
@@ -163,11 +174,11 @@ impl Service {
                     short_address,
                     extended_address: ExtendedAddress(extended_address),
                 },
-                Box::new(events) as BoxStream<Event>,
+                Box::new(events) as Box<Stream<Item = Event> + Send + Unpin>,
             )
         });
         let service = service.map_err(|e| Error::RadioError(e));
-        let service = Box::new(service);
+        //let service = Box::new(service);
         service
     }
 
@@ -183,11 +194,11 @@ impl Service {
         return self.short_address;
     }
 
-    fn send_raw_frame(&self, frame: Frame) -> BoxFuture<()> {
+    fn send_raw_frame(&self, frame: Frame) -> impl futures::Future<Output = Result<(), Error>> {
         self.inner.send_raw_frame(frame)
     }
 
-    pub fn send_beacon(&self, payload: Bytes) -> BoxFuture<()> {
+    pub fn send_beacon(&self, payload: Bytes) -> impl futures::Future<Output = Result<(), Error>> {
         let beacon = Frame {
             acknowledge_request: false,
             sequence_number: self.fresh_sequence_number().into(),

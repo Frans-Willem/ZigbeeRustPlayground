@@ -1,6 +1,4 @@
-use futures::future::FutureObj;
 use futures::{Future, TryFuture, TryFutureExt};
-use std::pin::Pin;
 
 pub type RetTryFuture<V, E> = Box<Future<Output = Result<V, E>> + Send + Unpin>;
 pub type RetFuture<V> = Box<Future<Output = V> + Send + Unpin>;

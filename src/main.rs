@@ -1,4 +1,4 @@
-#![feature(futures_api, async_await, await_macro)]
+#![feature(futures_api, async_await, await_macro, trait_alias)]
 #![allow(dead_code)]
 extern crate bitfield;
 extern crate bytes;
@@ -12,44 +12,51 @@ extern crate futures;
 
 #[macro_use]
 mod parse_serialize;
-//mod delayqueue;
+mod delayqueue;
 //mod ackmap;
-//mod cachemap;
+mod cachemap;
+mod ieee802154;
 mod radio_bridge;
 mod ret_future;
-//mod ieee802154;
-//mod radio_bridge;
-//
 use futures::compat::*;
+
 use futures::task::{Spawn, SpawnExt};
-use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
+use futures::{Future, FutureExt, SinkExt, StreamExt, TryFuture, TryFutureExt};
+use ieee802154::mac::service::Event as MACEvent;
+use ieee802154::mac::service::Service as MACService;
 use tokio::codec::Decoder;
 use tokio::prelude::Future as _;
 use tokio::prelude::Stream as _;
 use tokio::runtime::Runtime;
 
-/*
 use bytes::Bytes;
-use ieee802154::mac::service::Event as MACEvent;
-use ieee802154::mac::service::Service as MACService;
-use tokio::prelude::{Future, Stream};
-use tokio_core::reactor::{Core, Handle};
 
-fn on_mac_event(handle: &Handle, service: &MACService, event: MACEvent) -> Result<(), ()> {
+pub trait CloneSpawn: futures::task::Spawn + Send + Sync {
+    fn clone(&self) -> Box<CloneSpawn>;
+}
+
+impl<T: futures::task::Spawn + Clone + Send + Sync + 'static> CloneSpawn for T {
+    fn clone(&self) -> Box<CloneSpawn> {
+        Box::new(self.clone())
+    }
+}
+
+fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &MACService, event: MACEvent) {
     eprintln!("MAC event: {:?}", event);
     match event {
         MACEvent::BeaconRequest() => {
             let payload =
                 Bytes::from(&b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00"[..]);
             println!("Sending beacon!");
-            handle.spawn(service.send_beacon(payload).then(|res| {
-                println!("Sent beacon: {:?}", res);
-                Ok(())
-            }));
+            handle
+                .spawn(service.send_beacon(payload).map(|res| {
+                    println!("Sent beacon: {:?}", res);
+                }))
+                .unwrap();
         }
     }
-    Ok(())
 }
+/*
 
 fn main() {
     let settings = tokio_serial::SerialPortSettings::default();
@@ -97,39 +104,41 @@ impl Clone for MySpawner {
     }
 }
 
-async fn play_with_service(service: radio_bridge::service::RadioBridgeService) {
-    println!("Getting extended address");
-    let extended_address = await!(service.get_long_address()).unwrap();
-    println!("Extended address: {:X}", extended_address);
-    println!("Turning on");
-    await!(service.on()).unwrap();
-    println!(
-        "Min channel: {}",
-        await!(service.get_channel_min()).unwrap()
-    );
-    println!(
-        "Max channel: {}",
-        await!(service.get_channel_max()).unwrap()
-    );
-}
-
 fn main() {
     let rt = Runtime::new().unwrap();
-    let mut spawner = MySpawner(rt.executor());
+    let mut spawner: Box<CloneSpawn> = Box::new(MySpawner(rt.executor()));
     let settings = tokio_serial::SerialPortSettings::default();
     let port = tokio_serial::Serial::from_path("/dev/ttyACM0", &settings).unwrap();
     let (output_sink, output_stream) = radio_bridge::serial_protocol::Codec::new()
         .framed(port)
         .split();
-    /*
-    let output_sink : Box<tokio::prelude::Sink<SinkItem=radio_bridge::serial_protocol::Command, SinkError=std::io::Error>> = Box::new(output_sink);
-    */
+
     let output_sink = Box::new(output_sink.sink_compat());
     let output_stream = Box::new(output_stream.compat());
-    let (raw_service, _incoming_packets) =
+    let (service, incoming_packets) =
         radio_bridge::service::RadioBridgeService::new(output_sink, output_stream, &mut spawner);
+    let service = MACService::new(
+        spawner.clone(),
+        service,
+        Box::new(incoming_packets),
+        25,
+        ieee802154::ShortAddress(0),
+        ieee802154::PANID(12345),
+    );
 
-    spawner.spawn(play_with_service(raw_service)).unwrap();
+    let service = service.map_err(|e| eprintln!("Unable to start MAC service: {:?}", e));
+
+    let mut service_spawner = spawner.clone();
+    let service = service
+        .and_then(move |(macservice, macevents)| {
+            macevents
+                .for_each(move |event| {
+                    futures::future::ready(on_mac_event(&mut service_spawner, &macservice, event))
+                })
+                .map(|x| Ok(x))
+        })
+        .map(|x| x.unwrap());
+    spawner.spawn(service).unwrap();
 
     rt.shutdown_on_idle().wait().unwrap();
 }

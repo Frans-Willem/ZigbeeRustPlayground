@@ -1,15 +1,10 @@
 use bytes::Bytes;
 use futures::channel::{mpsc, oneshot};
 use futures::task::{Spawn, SpawnExt};
-use futures::{
-    Future, FutureExt, Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStream, TryStreamExt,
-};
+use futures::{Future, Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
-use tokio::codec::Decoder;
-use tokio::reactor::Handle;
-use tokio_serial::Serial;
 
 use crate::radio_bridge::serial_protocol;
 use crate::ret_future::*;

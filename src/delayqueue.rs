@@ -3,10 +3,41 @@ use futures::compat::Stream01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::Stream;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::{LockResult, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+use tokio::prelude::Async as Async01;
+use tokio::prelude::Stream as Stream01;
 use tokio::timer::delay_queue::Expired as TokioDQExpired;
 use tokio::timer::delay_queue::Key as TokioDQKey;
 use tokio::timer::DelayQueue as TokioDQ;
+
+struct WrappedTokioDQ<T>(Arc<Mutex<TokioDQ<T>>>);
+
+impl<T> WrappedTokioDQ<T> {
+    fn new() -> WrappedTokioDQ<T> {
+        WrappedTokioDQ(Arc::new(Mutex::new(TokioDQ::new())))
+    }
+
+    fn lock(&self) -> LockResult<MutexGuard<TokioDQ<T>>> {
+        self.0.lock()
+    }
+}
+
+impl<T> Clone for WrappedTokioDQ<T> {
+    fn clone(&self) -> Self {
+        WrappedTokioDQ(self.0.clone())
+    }
+}
+
+impl<T> Stream01 for WrappedTokioDQ<T> {
+    type Item = <TokioDQ<T> as Stream01>::Item;
+    type Error = <TokioDQ<T> as Stream01>::Error;
+
+    fn poll(&mut self) -> Result<Async01<Option<Self::Item>>, Self::Error> {
+        self.0.lock().unwrap().poll()
+    }
+}
 
 /**
  * Usage loosely based on tokio::timer::DelayQueue, with the following changes:
@@ -14,7 +45,8 @@ use tokio::timer::DelayQueue as TokioDQ;
  * - Stream does not complete until you call 'end', no need for manual task awakening
  */
 pub struct DelayQueue<T> {
-    inner: Compat01As03<TokioDQ<T>>,
+    inner: WrappedTokioDQ<T>,
+    inner_as03: Compat01As03<WrappedTokioDQ<T>>,
     finished: bool,
     waker: Option<Waker>,
 }
@@ -37,8 +69,10 @@ pub enum Error {
 
 impl<T> DelayQueue<T> {
     pub fn new() -> DelayQueue<T> {
+        let inner_wrapped = WrappedTokioDQ::new();
         DelayQueue {
-            inner: TokioDQ::new().compat(),
+            inner: inner_wrapped.clone(),
+            inner_as03: inner_wrapped.compat(),
             finished: false,
             waker: None,
         }
@@ -54,7 +88,7 @@ impl<T> DelayQueue<T> {
         if self.finished {
             Key(None)
         } else {
-            let retval = Key(Some(self.inner.get_ref().insert_at(value, when)));
+            let retval = Key(Some(self.inner.lock().unwrap().insert_at(value, when)));
             self.wake_me();
             retval
         }
@@ -64,7 +98,7 @@ impl<T> DelayQueue<T> {
         if self.finished {
             Key(None)
         } else {
-            let retval = Key(Some(self.inner.get_ref().insert(value, timeout)));
+            let retval = Key(Some(self.inner.lock().unwrap().insert(value, timeout)));
             self.wake_me();
             retval
         }
@@ -74,7 +108,7 @@ impl<T> DelayQueue<T> {
         if self.finished {
             Expired(None)
         } else if let Key(Some(inner_key)) = key {
-            Expired(Some(self.inner.get_ref().remove(inner_key)))
+            Expired(Some(self.inner.lock().unwrap().remove(inner_key)))
         } else {
             Expired(None)
         }
@@ -83,7 +117,7 @@ impl<T> DelayQueue<T> {
     pub fn reset_at(&mut self, key: &Key, when: Instant) {
         if !self.finished {
             if let Key(Some(inner_key)) = key {
-                self.inner.get_ref().reset_at(inner_key, when);
+                self.inner.lock().unwrap().reset_at(inner_key, when);
                 self.wake_me();
             }
         }
@@ -92,7 +126,7 @@ impl<T> DelayQueue<T> {
     pub fn reset(&mut self, key: &Key, timeout: Duration) {
         if !self.finished {
             if let Key(Some(inner_key)) = key {
-                self.inner.get_ref().reset(inner_key, timeout);
+                self.inner.lock().unwrap().reset(inner_key, timeout);
                 self.wake_me();
             }
         }
@@ -100,14 +134,14 @@ impl<T> DelayQueue<T> {
 
     pub fn clear(&mut self) {
         if !self.finished {
-            self.inner.get_ref().clear();
+            self.inner.lock().unwrap().clear();
             self.wake_me();
         }
     }
 
     pub fn end(&mut self) {
         self.finished = true;
-        self.inner.get_ref().clear();
+        self.inner.lock().unwrap().clear();
         self.wake_me();
     }
 }
@@ -119,10 +153,10 @@ impl<T> Stream for DelayQueue<T> {
         if self.finished {
             Poll::Ready(None)
         } else {
-            let inner = std::pin::Pin::new(&mut self.inner);
-            match inner.poll_next(cx) {
+            let mut unpinned = self.get_mut();
+            match Pin::new(&mut unpinned.inner_as03).poll_next(cx) {
                 Poll::Ready(None) => {
-                    self.waker = Some(cx.waker().clone());
+                    unpinned.waker = Some(cx.waker().clone());
                     Poll::Pending
                 }
                 Poll::Ready(Some(Ok(x))) => Poll::Ready(Some(Ok(Expired(Some(x))))),
