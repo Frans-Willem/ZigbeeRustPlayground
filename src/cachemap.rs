@@ -47,10 +47,8 @@ where
         let delay = self.expirations.insert(key.clone(), ttl);
         if let Some((old_value, old_delay)) = self.entries.insert(key, (value, delay)) {
             self.expirations.remove(&old_delay);
-            println!("Cachemap replaced, new size {}", self.entries.len());
             Some(old_value)
         } else {
-            println!("Cachemap added, new size {}", self.entries.len());
             None
         }
     }
@@ -72,7 +70,6 @@ where
             match res {
                 Ok(entry) => {
                     unpinned.entries.remove(entry.get_ref());
-                    println!("Cachemap dropped, new size {}", unpinned.entries.len());
                 }
                 Err(e) => {
                     eprintln!("DelayQueue error: {:?}", e);

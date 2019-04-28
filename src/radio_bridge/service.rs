@@ -270,27 +270,25 @@ impl RadioBridgeService {
     );
 
     pub fn send(&self, data: Bytes) -> impl Future<Output = Result<(), Error>> {
-        Box::new(
-            self.inner
-                .call(raw_service::Request {
-                    command_id: raw_service::RequestCommand::RadioSend,
-                    data: data,
-                })
-                .map_err(|e| Error::RawError(e))
-                .and_then(|data| {
-                    if data.len() < 2 {
-                        future::err(Error::UnexpectedResponseSize)
+        self.inner
+            .call(raw_service::Request {
+                command_id: raw_service::RequestCommand::RadioSend,
+                data: data,
+            })
+            .map_err(|e| Error::RawError(e))
+            .and_then(|data| {
+                if data.len() < 2 {
+                    future::err(Error::UnexpectedResponseSize)
+                } else {
+                    let mut data = data.into_buf();
+                    let retval = data.get_u16_be();
+                    if retval == 0 {
+                        future::ok(())
                     } else {
-                        let mut data = data.into_buf();
-                        let retval = data.get_u16_be();
-                        if retval == 0 {
-                            future::ok(())
-                        } else {
-                            future::err(Error::ErrorCode(retval as usize))
-                        }
+                        future::err(Error::ErrorCode(retval as usize))
                     }
-                }),
-        )
+                }
+            })
     }
 
     pub fn on(&self) -> impl Future<Output = Result<(), Error>> {

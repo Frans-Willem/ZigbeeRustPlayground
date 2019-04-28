@@ -1,4 +1,4 @@
-#![feature(futures_api, async_await, await_macro, trait_alias)]
+#![feature(async_await, await_macro, trait_alias)]
 #![allow(dead_code)]
 extern crate bitfield;
 extern crate bytes;
