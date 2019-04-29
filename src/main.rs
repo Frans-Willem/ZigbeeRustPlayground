@@ -52,6 +52,23 @@ fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &MACService, event: MACEv
                 }))
                 .unwrap();
         }
+        MACEvent::AssociationRequest {
+            source,
+            receive_on_when_idle,
+        } => {
+            eprintln!(
+                "Association request: {:?} {:?}",
+                source, receive_on_when_idle
+            );
+            let short_addr = service.associate(source, receive_on_when_idle);
+            handle
+                .spawn(
+                    service
+                        .send_association_response(source, short_addr)
+                        .map(|res| println!("Send association response {:?}", res)),
+                )
+                .unwrap();
+        }
     }
 }
 
