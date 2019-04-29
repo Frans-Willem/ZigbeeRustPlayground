@@ -331,7 +331,6 @@ impl SerializeToBuf for FrameType {
                 association_permit,
             } => {
                 let mut ss = SuperframeSpecification(0);
-                ss.serialize_to_buf(buf)?;
                 ss.set_beacon_order(
                     (*beacon_order)
                         .try_into()
@@ -358,6 +357,7 @@ impl SerializeToBuf for FrameType {
             }
             FrameType::Data => Ok(()),
             FrameType::Ack => Ok(()),
+            FrameType::Command(cmd) => cmd.serialize_to_buf(buf),
             _ => Err(ParseError::Unimplemented("Frametype not implemented")),
         }
     }
@@ -524,6 +524,7 @@ impl SerializeToBuf for Frame {
                 x.serialize_to_buf(buf)?;
             }
         }
+        self.source.serialize_to_buf(buf)?;
         self.frame_type.serialize_to_buf(buf)?;
         self.payload.serialize_to_buf(buf)?;
         Ok(())
@@ -555,6 +556,29 @@ fn test_serialize_mac_frame() {
         vec![
             0x00, 0x80, 0x40, 0x98, 0x76, 0x00, 0x00, 0xFF, 0xCF, 0x00, 0x00, 0x00, 0x22, 0x84,
             0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF, 0x00
+        ],
+        buf
+    );
+
+    let input = Frame {
+        acknowledge_request: true,
+        sequence_number: Some(10),
+        destination_pan: PANID(0x7698).into(),
+        destination: ExtendedAddress(0xd0cf5efffe1c6306).into(),
+        source_pan: PANID(0x7698).into(),
+        source: ExtendedAddress(0x00124b000e896815).into(),
+        frame_type: FrameType::Command(Command::AssociationResponse {
+            short_address: ShortAddress(0x558b),
+            status: AssociationResponseStatus::AssociationSuccessful,
+        }),
+        payload: Bytes::new(),
+    };
+    let mut buf = vec![];
+    input.serialize_to_buf(&mut buf).unwrap();
+    assert_eq!(
+        vec![
+            0x63, 0xcc, 0x0a, 0x98, 0x76, 0x06, 0x63, 0x1c, 0xfe, 0xff, 0x5e, 0xcf, 0xd0, 0x15,
+            0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0x02, 0x8b, 0x55, 0x00,
         ],
         buf
     );
