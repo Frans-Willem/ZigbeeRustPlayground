@@ -396,6 +396,7 @@ impl SerializeToBufTagged<u16> for FrameType {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Frame {
+    pub frame_pending: bool,
     pub acknowledge_request: bool,
     pub sequence_number: Option<u8>,
     pub destination_pan: Option<PANID>,
@@ -409,6 +410,7 @@ pub struct Frame {
 impl ParseFromBuf for Frame {
     fn parse_from_buf(buf: &mut Buf) -> Result<Frame, ParseError> {
         let fsf = FrameControl::parse_from_buf(buf)?;
+        let frame_pending = fsf.frame_pending() > 0;
         let acknowledge_request = fsf.acknowledge_request() > 0;
         let sequence_number = if fsf.sequence_number_supression() != 0 {
             None
@@ -433,6 +435,7 @@ impl ParseFromBuf for Frame {
         let frame_type = FrameType::parse_from_buf(fsf.frame_type(), buf)?;
         let payload = buf.collect();
         Ok(Frame {
+            frame_pending,
             acknowledge_request,
             sequence_number,
             destination_pan,
@@ -453,6 +456,7 @@ fn test_parse_mac_frame() {
     assert_eq!(
         parsed,
         Frame {
+            frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(165),
             destination_pan: Some(PANID(0xFFFF)),
@@ -474,6 +478,7 @@ fn test_parse_mac_frame() {
     assert_eq!(
         parsed,
         Frame {
+            frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(1),
             destination_pan: Some(PANID(0x7698)),
@@ -494,6 +499,7 @@ fn test_parse_mac_frame() {
     assert_eq!(
         parsed,
         Frame {
+            frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(64),
             source_pan: Some(PANID(0x7698)),
@@ -518,7 +524,7 @@ impl SerializeToBuf for Frame {
         let mut fsf = FrameControl(0);
         fsf.set_frame_type(self.frame_type.get_serialize_tag()?);
         fsf.set_security_enabled(0);
-        fsf.set_frame_pending(0);
+        fsf.set_frame_pending(self.frame_pending.into());
         fsf.set_acknowledge_request(self.acknowledge_request.into());
         fsf.set_pan_id_compression(
             (self.source_pan == self.destination_pan && self.source_pan.is_some()).into(),
@@ -552,6 +558,7 @@ impl SerializeToBuf for Frame {
 #[test]
 fn test_serialize_mac_frame() {
     let input = Frame {
+        frame_pending: false,
         acknowledge_request: false,
         sequence_number: Some(64),
         destination_pan: None,
@@ -579,6 +586,7 @@ fn test_serialize_mac_frame() {
     );
 
     let input = Frame {
+        frame_pending: false,
         acknowledge_request: true,
         sequence_number: Some(10),
         destination_pan: PANID(0x7698).into(),
@@ -603,11 +611,12 @@ fn test_serialize_mac_frame() {
 }
 
 impl Frame {
-    pub fn create_ack(&self) -> Option<Frame> {
+    pub fn create_ack(&self, frame_pending: bool) -> Option<Frame> {
         if !self.acknowledge_request {
             None
         } else {
             Some(Frame {
+                frame_pending,
                 acknowledge_request: false,
                 sequence_number: self.sequence_number,
                 destination_pan: None,

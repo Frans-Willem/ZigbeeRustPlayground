@@ -11,6 +11,7 @@ use crate::CloneSpawn;
 use bytes::{Bytes, IntoBuf};
 use futures::channel::mpsc;
 use futures::channel::oneshot;
+use futures::future::FutureExt;
 use futures::future::TryFutureExt;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -54,6 +55,13 @@ impl Association {
                 eprintln!("Warning: queue dropped")
             }
         }
+    }
+
+    fn has_pending(&self) -> bool {
+        self.queue
+            .as_ref()
+            .map(|queue_ref| !queue_ref.lock().unwrap().is_empty())
+            .unwrap_or(false)
     }
 }
 
@@ -144,65 +152,40 @@ impl Associations {
         short_address
     }
 
-    fn get_queue_slot_shortaddr(&mut self, address: &ShortAddress) -> impl Future<()> {
-        match self.by_short.get(address) {
-            Some(association) => Box::new(association.get_queue_slot()),
-            None => {
-                eprintln!("Attempting to queue data to unassociated device!");
-                Box::new(futures::future::ok(())) as Box<Future<()> + Unpin + Send>
-            }
-        }
-    }
-    fn get_queue_slot_extaddr(&mut self, address: &ExtendedAddress) -> impl Future<()> {
-        match self.by_extended.get(address) {
-            Some(association) => Box::new(association.get_queue_slot()),
-            None => {
-                eprintln!("Attempting to queue data to unassociated device!");
-                Box::new(futures::future::ok(())) as Box<Future<()> + Unpin + Send>
-            }
-        }
-    }
-    fn get_queue_slot_addrspec(&mut self, address: &AddressSpecification) -> impl Future<()> {
+    fn get_by_addrspec(&mut self, address: &AddressSpecification) -> Option<Arc<Association>> {
         match address {
-            AddressSpecification::None => {
-                Box::new(futures::future::ok(())) as Box<Future<()> + Unpin + Send>
-            }
-            AddressSpecification::Reserved => {
-                Box::new(futures::future::ok(())) as Box<Future<()> + Unpin + Send>
-            }
-            AddressSpecification::Short(address) => {
-                Box::new(self.get_queue_slot_shortaddr(address))
-            }
+            AddressSpecification::None => None,
+            AddressSpecification::Reserved => None,
+            AddressSpecification::Short(address) => self.by_short.get(address).map(|x| x.clone()),
             AddressSpecification::Extended(address) => {
-                Box::new(self.get_queue_slot_extaddr(address))
+                self.by_extended.get(address).map(|x| x.clone())
             }
         }
     }
 
-    fn kick_shortaddr(&mut self, address: &ShortAddress) {
-        if let Some(association) = self.by_short.get(address) {
+    fn get_queue_slot(&mut self, address: &AddressSpecification) -> impl Future<()> {
+        if let Some(association) = self.get_by_addrspec(address) {
+            Box::new(association.get_queue_slot())
+        } else {
+            Box::new(futures::future::ok(())) as Box<Future<()> + Unpin + Send>
+        }
+    }
+
+    fn kick(&mut self, address: &AddressSpecification) {
+        if let Some(association) = self.get_by_addrspec(address) {
             association.kick()
         }
     }
 
-    fn kick_extaddr(&mut self, address: &ExtendedAddress) {
-        if let Some(association) = self.by_extended.get(address) {
-            association.kick()
-        }
-    }
-
-    fn kick_addrspec(&mut self, address: &AddressSpecification) {
-        match address {
-            AddressSpecification::None => (),
-            AddressSpecification::Reserved => (),
-            AddressSpecification::Short(address) => self.kick_shortaddr(address),
-            AddressSpecification::Extended(address) => self.kick_extaddr(address),
-        }
+    fn has_frames_pending(&mut self, address: &AddressSpecification) -> bool {
+        self.get_by_addrspec(address)
+            .map(|assoc| assoc.has_pending())
+            .unwrap_or(false)
     }
 }
 
 struct InnerService {
-    handle: Box<CloneSpawn>,
+    handle: Mutex<Box<CloneSpawn>>,
     radio: RadioService,
     event_sink: mpsc::UnboundedSender<Event>,
     sequence_number: Mutex<u8>,
@@ -254,7 +237,7 @@ impl InnerService {
         let seen_messages = CacheMap::new(spawner.clone());
         (
             InnerService {
-                handle: spawner,
+                handle: Mutex::new(spawner),
                 radio,
                 event_sink: sender,
                 sequence_number: Mutex::new(0),
@@ -275,7 +258,28 @@ impl InnerService {
         retval
     }
 
+    fn has_frames_pending(&self, frame: &Frame) -> bool {
+        if frame.acknowledge_request && frame.frame_type == FrameType::Command(Command::DataRequest)
+        {
+            self.associations
+                .lock()
+                .unwrap()
+                .has_frames_pending(&frame.source)
+        } else {
+            false
+        }
+    }
+
     fn on_incoming_frame(&self, frame: Frame, _rssi: u8, _link_quality: u8) {
+        /*
+        if let Some(ack) = frame.create_ack(self.has_frames_pending(&frame)) {
+            self.handle.lock().unwrap().spawn(self.send_raw_frame(ack).map(|res| {
+                if let Err(e) = res {
+                    eprintln!("Unable to send acknowledgement: {:?}", e)
+                }
+            })).unwrap()
+        }
+        */
         if let Some(_) =
             self.seen_messages
                 .insert(frame.clone(), (), std::time::Duration::from_secs(2))
@@ -290,10 +294,7 @@ impl InnerService {
                 }
                 FrameType::Command(Command::DataRequest) => {
                     // TODO: Check if this frame was actually meant for me...
-                    self.associations
-                        .lock()
-                        .unwrap()
-                        .kick_addrspec(&frame.source)
+                    self.associations.lock().unwrap().kick(&frame.source)
                 }
                 FrameType::Command(Command::AssociationRequest {
                     receive_on_when_idle,
@@ -324,10 +325,7 @@ impl InnerService {
     }
 
     fn get_queue_slot(&self, addr: &AddressSpecification) -> impl Future<()> {
-        self.associations
-            .lock()
-            .unwrap()
-            .get_queue_slot_addrspec(addr)
+        self.associations.lock().unwrap().get_queue_slot(addr)
     }
 
     fn send_raw_frame(&self, frame: Frame) -> impl Future<()> {
@@ -424,6 +422,7 @@ impl Service {
 
     pub fn send_beacon(&self, payload: Bytes) -> impl futures::Future<Output = Result<(), Error>> {
         let beacon = Frame {
+            frame_pending: false,
             acknowledge_request: false,
             sequence_number: self.fresh_sequence_number().into(),
             destination_pan: None,
@@ -454,6 +453,7 @@ impl Service {
         short_address: ShortAddress,
     ) -> impl Future<()> {
         let response = Frame {
+            frame_pending: false,
             acknowledge_request: true,
             sequence_number: self.fresh_sequence_number().into(),
             destination_pan: Some(self.pan_id),
