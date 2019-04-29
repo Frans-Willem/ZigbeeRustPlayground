@@ -265,6 +265,24 @@ impl ParseFromBuf for Command {
     }
 }
 
+impl SerializeToBuf for Command {
+    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+        match self {
+            Command::AssociationResponse {
+                short_address,
+                status,
+            } => {
+                (2 as u8).serialize_to_buf(buf)?;
+                short_address.serialize_to_buf(buf)?;
+                status.serialize_to_buf(buf)
+            }
+            _ => Err(ParseError::Unimplemented(
+                "Serialization of command not implemented",
+            )),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum FrameType {
     Beacon {
