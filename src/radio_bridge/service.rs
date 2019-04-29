@@ -86,8 +86,7 @@ pub struct RadioRxMode {
 
 impl FromToRadioValue for RadioRxMode {
     fn to_radio_value(&self) -> Result<u16, Error> {
-        let retval = 
-        Ok((self.address_filter as u16) << 0
+        let retval = Ok((self.address_filter as u16) << 0
             | (self.autoack as u16) << 1
             | (self.poll_mode as u16) << 2);
         retval
@@ -110,45 +109,64 @@ impl FromToRadioValue for RadioRxMode {
 fn test_radio_rx_mode_tofrom() {
     let input: u16 = 0;
     let parsed = RadioRxMode::from_radio_value(input).unwrap();
-    assert_eq!(RadioRxMode {
-        address_filter: false,
-        autoack: false,
-        poll_mode: false}, parsed);
+    assert_eq!(
+        RadioRxMode {
+            address_filter: false,
+            autoack: false,
+            poll_mode: false
+        },
+        parsed
+    );
     assert_eq!(parsed.to_radio_value().unwrap(), input);
 
     let input: u16 = 1;
     let parsed = RadioRxMode::from_radio_value(input).unwrap();
-    assert_eq!(RadioRxMode {
-        address_filter: true,
-        autoack: false,
-        poll_mode: false}, parsed);
+    assert_eq!(
+        RadioRxMode {
+            address_filter: true,
+            autoack: false,
+            poll_mode: false
+        },
+        parsed
+    );
     assert_eq!(parsed.to_radio_value().unwrap(), input);
 
     let input: u16 = 2;
     let parsed = RadioRxMode::from_radio_value(input).unwrap();
-    assert_eq!(RadioRxMode {
-        address_filter: false,
-        autoack: true,
-        poll_mode: false}, parsed);
+    assert_eq!(
+        RadioRxMode {
+            address_filter: false,
+            autoack: true,
+            poll_mode: false
+        },
+        parsed
+    );
     assert_eq!(parsed.to_radio_value().unwrap(), input);
 
     let input: u16 = 4;
     let parsed = RadioRxMode::from_radio_value(input).unwrap();
-    assert_eq!(RadioRxMode {
-        address_filter: false,
-        autoack: false,
-        poll_mode: true}, parsed);
+    assert_eq!(
+        RadioRxMode {
+            address_filter: false,
+            autoack: false,
+            poll_mode: true
+        },
+        parsed
+    );
     assert_eq!(parsed.to_radio_value().unwrap(), input);
 
     let input: u16 = 7;
     let parsed = RadioRxMode::from_radio_value(input).unwrap();
-    assert_eq!(RadioRxMode {
-        address_filter: true,
-        autoack: true,
-        poll_mode: true}, parsed);
+    assert_eq!(
+        RadioRxMode {
+            address_filter: true,
+            autoack: true,
+            poll_mode: true
+        },
+        parsed
+    );
     assert_eq!(parsed.to_radio_value().unwrap(), input);
 }
-
 
 macro_rules! default_param_get_set{
     ($param:expr, $t:ty, $get:ident, $set:ident) => {
