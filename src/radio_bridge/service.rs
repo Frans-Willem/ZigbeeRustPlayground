@@ -379,4 +379,91 @@ impl RadioBridgeService {
                 }),
         )
     }
+
+    pub fn init_pending_data_table(&self) -> impl Future<Output = Result<(), Error>> {
+        Box::new(
+            self.inner
+                .call(raw_service::Request {
+                    command_id: raw_service::RequestCommand::RadioInitPendingTable,
+                    data: Bytes::new(),
+                })
+                .map_err(|e| Error::RawError(e))
+                .and_then(|data| {
+                    if data.len() < 2 {
+                        future::err(Error::UnexpectedResponseSize)
+                    } else {
+                        let mut data = data.into_buf();
+                        let retval = data.get_u16_be();
+                        if retval == 0 {
+                            future::ok(())
+                        } else {
+                            future::err(Error::ErrorCode(retval as usize))
+                        }
+                    }
+                }),
+        )
+    }
+
+    pub fn set_pending_data_ext(
+        &self,
+        index: usize,
+        address: Option<u64>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        let mut request_data = BytesMut::new();
+        request_data.put_u8(0x80 | (index as u8));
+        if let Some(address) = address {
+            request_data.put_u64_le(address);
+        }
+        self.inner
+            .call(raw_service::Request {
+                command_id: raw_service::RequestCommand::RadioSetPending,
+                data: request_data.freeze(),
+            })
+            .map_err(|e| Error::RawError(e))
+            .and_then(|data| {
+                if data.len() < 2 {
+                    future::err(Error::UnexpectedResponseSize)
+                } else {
+                    let mut data = data.into_buf();
+                    let retval = data.get_u16_be();
+                    if retval == 0 {
+                        future::ok(())
+                    } else {
+                        future::err(Error::ErrorCode(retval as usize))
+                    }
+                }
+            })
+    }
+
+    pub fn set_pending_data_short(
+        &self,
+        index: usize,
+        address: Option<(u16, u16)>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        let mut request_data = BytesMut::new();
+        request_data.put_u8(0x7F & (index as u8));
+        if let Some((panid, address)) = address {
+            request_data.put_u16_le(panid);
+            request_data.put_u16_le(address);
+        }
+        self.inner
+            .call(raw_service::Request {
+                command_id: raw_service::RequestCommand::RadioSetPending,
+                data: request_data.freeze(),
+            })
+            .map_err(|e| Error::RawError(e))
+            .and_then(|data| {
+                if data.len() < 2 {
+                    future::err(Error::UnexpectedResponseSize)
+                } else {
+                    let mut data = data.into_buf();
+                    let retval = data.get_u16_be();
+                    if retval == 0 {
+                        future::ok(())
+                    } else {
+                        future::err(Error::ErrorCode(retval as usize))
+                    }
+                }
+            })
+    }
 }

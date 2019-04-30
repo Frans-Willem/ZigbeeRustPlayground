@@ -19,6 +19,8 @@ pub enum RequestCommand {
     RadioSetValue,
     RadioGetObject,
     RadioSetObject,
+    RadioInitPendingTable,
+    RadioSetPending,
 }
 
 pub struct Request {
