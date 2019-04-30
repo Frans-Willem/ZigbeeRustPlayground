@@ -10,6 +10,143 @@ use bytes::IntoBuf;
 use bytes::{Buf, BufMut, Bytes};
 use std::convert::{TryFrom, TryInto};
 
+/*=== Publicly accessible structures & enums ===*/
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum AddressSpecification {
+    None,
+    Reserved,
+    Short(ShortAddress),
+    Extended(ExtendedAddress),
+}
+
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
+#[TryFromPrimitiveType = "u8"]
+pub enum DeviceType {
+    RFD = 0, // Reduced function device
+    FFD = 1, // Full functioning device
+}
+
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
+#[TryFromPrimitiveType = "u8"]
+pub enum PowerSource {
+    Battery = 0, // Not AC powered
+    Powered = 1, // AC powered
+}
+
+#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
+#[TryFromPrimitiveType = "u8"]
+pub enum AssociationResponseStatus {
+    AssociationSuccessful = 0,
+    PANAtCapacity = 1,
+    PANAccessDenied = 2,
+    HoppingSequenceOffsetDuplication = 3,
+    FastAssociationSuccessful = 0x80,
+}
+default_parse_serialize_enum!(AssociationResponseStatus, u8);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum Command {
+    AssociationRequest {
+        /* 0x01 */
+        alternate_pan_coordinator: bool,
+        device_type: DeviceType,
+        power_source: PowerSource,
+        receive_on_when_idle: bool,
+        security_capability: bool,
+        allocate_address: bool,
+    },
+    AssociationResponse {
+        /* 0x02 */
+        short_address: ShortAddress,
+        status: AssociationResponseStatus,
+    },
+    DataRequest,   /* 0x04 */
+    BeaconRequest, /* 0x07 */
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum FrameType {
+    Beacon {
+        beacon_order: usize,
+        superframe_order: usize,
+        final_cap_slot: usize,
+        battery_life_extension: bool,
+        pan_coordinator: bool,
+        association_permit: bool,
+    },
+    Data,
+    Ack,
+    Command(Command),
+    Reserved,
+    Multipurpose,
+    Fragment,
+    Extended,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct Frame {
+    pub frame_pending: bool,
+    pub acknowledge_request: bool,
+    pub sequence_number: Option<u8>,
+    pub destination_pan: Option<PANID>,
+    pub destination: AddressSpecification,
+    pub source_pan: Option<PANID>,
+    pub source: AddressSpecification,
+    pub frame_type: FrameType,
+    pub payload: Bytes,
+}
+
+impl Frame {
+    /**
+     * TODO: Doing this manually is too slow, it should be left to hardware.
+     * Maybe remove ?
+     */
+    pub fn create_ack(&self, frame_pending: bool) -> Option<Frame> {
+        if !self.acknowledge_request {
+            None
+        } else {
+            Some(Frame {
+                frame_pending,
+                acknowledge_request: false,
+                sequence_number: self.sequence_number,
+                destination_pan: None,
+                destination: AddressSpecification::None,
+                source_pan: None,
+                source: AddressSpecification::None,
+                frame_type: FrameType::Ack,
+                payload: Bytes::new(),
+            })
+        }
+    }
+}
+
+/*=== Into & From implementations */
+impl From<ShortAddress> for AddressSpecification {
+    fn from(item: ShortAddress) -> Self {
+        AddressSpecification::Short(item)
+    }
+}
+
+impl From<ExtendedAddress> for AddressSpecification {
+    fn from(item: ExtendedAddress) -> Self {
+        AddressSpecification::Extended(item)
+    }
+}
+
+impl<A> From<Option<A>> for AddressSpecification
+where
+    A: Into<AddressSpecification>,
+{
+    fn from(item: Option<A>) -> Self {
+        match item {
+            None => AddressSpecification::None,
+            Some(x) => x.into(),
+        }
+    }
+}
+
+/*=== Bitfields for serialization & parsing ===*/
 bitfield! {
     pub struct FrameControl(u16);
     impl Debug;
@@ -90,14 +227,34 @@ fn test_frame_control_serialize() {
     assert_eq!(buf, input);
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum AddressSpecification {
-    None,
-    Reserved,
-    Short(ShortAddress),
-    Extended(ExtendedAddress),
+bitfield! {
+    struct SuperframeSpecification(u16);
+    impl Debug;
+    pub beacon_order, set_beacon_order: 3, 0;
+    pub superframe_order, set_superframe_order: 7, 4;
+    pub final_cap_slot, set_final_cap_slot: 11, 8;
+    pub battery_life_extension, set_battery_life_extension: 12, 12;
+    pub reserved, set_reserved: 13, 13;
+    pub pan_coordinator, set_pan_coordinator: 14, 14;
+    pub association_permit, set_association_permit: 15, 15;
 }
+default_parse_serialize_newtype!(SuperframeSpecification, u16);
 
+bitfield! {
+    struct AssociationRequest(u8);
+    impl Debug;
+    pub alternate_pan_coordinator, set_alternate_pan_coordinator: 0, 0;
+    pub device_type, set_device_type: 1, 1;
+    pub power_source, set_power_source: 2, 2;
+    pub receive_on_when_idle, set_receive_on_when_idle: 3, 3;
+    pub association_type, set_association_type: 4, 4;
+    pub reserved2, set_reserved2: 5, 5;
+    pub security_capability, set_security_capability: 6, 6;
+    pub allocate_address, set_allocate_address: 7, 7;
+}
+default_parse_serialize_newtype!(AssociationRequest, u8);
+
+/*=== Serialization & parsing ===*/
 impl ParseFromBufTagged<u16> for AddressSpecification {
     fn parse_from_buf(mode: u16, buf: &mut Buf) -> ParseResult<AddressSpecification> {
         match mode {
@@ -134,105 +291,6 @@ impl SerializeToBufTagged<u16> for AddressSpecification {
             AddressSpecification::Extended(_) => 3,
         })
     }
-}
-
-impl From<ShortAddress> for AddressSpecification {
-    fn from(item: ShortAddress) -> Self {
-        AddressSpecification::Short(item)
-    }
-}
-impl From<ExtendedAddress> for AddressSpecification {
-    fn from(item: ExtendedAddress) -> Self {
-        AddressSpecification::Extended(item)
-    }
-}
-impl From<Option<ShortAddress>> for AddressSpecification where {
-    fn from(item: Option<ShortAddress>) -> Self {
-        match item {
-            None => AddressSpecification::None,
-            Some(x) => AddressSpecification::Short(x),
-        }
-    }
-}
-impl From<Option<ExtendedAddress>> for AddressSpecification where {
-    fn from(item: Option<ExtendedAddress>) -> Self {
-        match item {
-            None => AddressSpecification::None,
-            Some(x) => AddressSpecification::Extended(x),
-        }
-    }
-}
-
-bitfield! {
-    struct SuperframeSpecification(u16);
-    impl Debug;
-    pub beacon_order, set_beacon_order: 3, 0;
-    pub superframe_order, set_superframe_order: 7, 4;
-    pub final_cap_slot, set_final_cap_slot: 11, 8;
-    pub battery_life_extension, set_battery_life_extension: 12, 12;
-    pub reserved, set_reserved: 13, 13;
-    pub pan_coordinator, set_pan_coordinator: 14, 14;
-    pub association_permit, set_association_permit: 15, 15;
-}
-default_parse_serialize_newtype!(SuperframeSpecification, u16);
-
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
-#[TryFromPrimitiveType = "u8"]
-pub enum DeviceType {
-    RFD = 0, // Reduced function device
-    FFD = 1, // Full functioning device
-}
-
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
-#[TryFromPrimitiveType = "u8"]
-pub enum PowerSource {
-    Battery = 0, // Not AC powered
-    Powered = 1, // AC powered
-}
-
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
-#[TryFromPrimitiveType = "u8"]
-pub enum AssociationResponseStatus {
-    AssociationSuccessful = 0,
-    PANAtCapacity = 1,
-    PANAccessDenied = 2,
-    HoppingSequenceOffsetDuplication = 3,
-    FastAssociationSuccessful = 0x80,
-}
-default_parse_serialize_enum!(AssociationResponseStatus, u8);
-
-bitfield! {
-    struct AssociationRequest(u8);
-    impl Debug;
-    pub alternate_pan_coordinator, set_alternate_pan_coordinator: 0, 0;
-    pub device_type, set_device_type: 1, 1;
-    pub power_source, set_power_source: 2, 2;
-    pub receive_on_when_idle, set_receive_on_when_idle: 3, 3;
-    pub association_type, set_association_type: 4, 4;
-    pub reserved2, set_reserved2: 5, 5;
-    pub security_capability, set_security_capability: 6, 6;
-    pub allocate_address, set_allocate_address: 7, 7;
-}
-default_parse_serialize_newtype!(AssociationRequest, u8);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum Command {
-    AssociationRequest {
-        /* 0x01 */
-        alternate_pan_coordinator: bool,
-        device_type: DeviceType,
-        power_source: PowerSource,
-        receive_on_when_idle: bool,
-        security_capability: bool,
-        allocate_address: bool,
-    },
-    AssociationResponse {
-        /* 0x02 */
-        short_address: ShortAddress,
-        status: AssociationResponseStatus,
-    },
-    DataRequest,   /* 0x04 */
-    BeaconRequest, /* 0x07 */
 }
 
 impl ParseFromBuf for Command {
@@ -281,25 +339,6 @@ impl SerializeToBuf for Command {
             )),
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum FrameType {
-    Beacon {
-        beacon_order: usize,
-        superframe_order: usize,
-        final_cap_slot: usize,
-        battery_life_extension: bool,
-        pan_coordinator: bool,
-        association_permit: bool,
-    },
-    Data,
-    Ack,
-    Command(Command),
-    Reserved,
-    Multipurpose,
-    Fragment,
-    Extended,
 }
 
 impl ParseFromBufTagged<u16> for FrameType {
@@ -392,19 +431,6 @@ impl SerializeToBufTagged<u16> for FrameType {
             _ => Err(ParseError::Unimplemented("FrameType not implemented")),
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct Frame {
-    pub frame_pending: bool,
-    pub acknowledge_request: bool,
-    pub sequence_number: Option<u8>,
-    pub destination_pan: Option<PANID>,
-    pub destination: AddressSpecification,
-    pub source_pan: Option<PANID>,
-    pub source: AddressSpecification,
-    pub frame_type: FrameType,
-    pub payload: Bytes,
 }
 
 impl ParseFromBuf for Frame {
@@ -608,24 +634,4 @@ fn test_serialize_mac_frame() {
         ],
         buf
     );
-}
-
-impl Frame {
-    pub fn create_ack(&self, frame_pending: bool) -> Option<Frame> {
-        if !self.acknowledge_request {
-            None
-        } else {
-            Some(Frame {
-                frame_pending,
-                acknowledge_request: false,
-                sequence_number: self.sequence_number,
-                destination_pan: None,
-                destination: AddressSpecification::None,
-                source_pan: None,
-                source: AddressSpecification::None,
-                frame_type: FrameType::Ack,
-                payload: Bytes::new(),
-            })
-        }
-    }
 }
