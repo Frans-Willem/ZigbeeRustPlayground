@@ -154,11 +154,9 @@ impl<T> Stream for DelayQueue<T> {
             Poll::Ready(None)
         } else {
             let mut unpinned = self.get_mut();
+            unpinned.waker = Some(cx.waker().clone());
             match Pin::new(&mut unpinned.inner_as03).poll_next(cx) {
-                Poll::Ready(None) => {
-                    unpinned.waker = Some(cx.waker().clone());
-                    Poll::Pending
-                }
+                Poll::Ready(None) => Poll::Pending,
                 Poll::Ready(Some(Ok(x))) => Poll::Ready(Some(Ok(Expired(Some(x))))),
                 Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(Error::TokioError(e)))),
                 Poll::Pending => Poll::Pending,
