@@ -12,3 +12,4 @@ futures-preview = {version = "0.3.0-alpha.15", features=["compat"]}
 bitfield = "0.13"
 enum-tryfrom = "0.2"
 enum-tryfrom-derive = "0.2"
+bimap = "0.3"

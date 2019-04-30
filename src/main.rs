@@ -9,12 +9,14 @@ extern crate enum_tryfrom_derive;
 extern crate enum_tryfrom;
 #[macro_use]
 extern crate futures;
+extern crate bimap;
 
 #[macro_use]
 mod parse_serialize;
 mod cachemap;
 mod delayqueue;
 mod ieee802154;
+mod map_update;
 mod radio_bridge;
 use futures::compat::*;
 
@@ -39,7 +41,15 @@ impl<T: futures::task::Spawn + Clone + Send + Sync + 'static> CloneSpawn for T {
     }
 }
 
-fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &MACService, event: MACEvent) {
+async fn main_loop(handle: Box<CloneSpawn>, service: MACService) -> () {
+    let mut handle = handle;
+    let mut service = service;
+    while let Some(event) = await!(service.next()) {
+        on_mac_event(&mut handle, &mut service, event);
+    }
+}
+
+fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &mut MACService, event: MACEvent) {
     eprintln!("MAC event: {:?}", event);
     match event {
         MACEvent::BeaconRequest() => {
@@ -60,11 +70,11 @@ fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &MACService, event: MACEv
                 "Association request: {:?} {:?}",
                 source, receive_on_when_idle
             );
-            let short_addr = service.associate(source, receive_on_when_idle);
+            let _ = service.associate(source, receive_on_when_idle);
             handle
                 .spawn(
                     service
-                        .send_association_response(source, short_addr)
+                        .send_association_response(source)
                         .map(|res| println!("Send association response {:?}", res)),
                 )
                 .unwrap();
@@ -110,21 +120,13 @@ fn main() {
         Box::new(incoming_packets),
         25,
         ieee802154::ShortAddress(0),
-        ieee802154::PANID(12345),
+        ieee802154::PANID(0x7698),
     );
 
     let service = service.map_err(|e| eprintln!("Unable to start MAC service: {:?}", e));
 
-    let mut service_spawner = spawner.clone();
-    let service = service
-        .and_then(move |(macservice, macevents)| {
-            macevents
-                .for_each(move |event| {
-                    futures::future::ready(on_mac_event(&mut service_spawner, &macservice, event))
-                })
-                .map(|x| Ok(x))
-        })
-        .map(|x| x.unwrap());
+    let service_spawner = spawner.clone();
+    let service = service.then(move |macservice| main_loop(service_spawner, macservice.unwrap()));
     spawner.spawn(service).unwrap();
 
     rt.shutdown_on_idle().wait().unwrap();

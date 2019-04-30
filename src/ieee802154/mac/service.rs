@@ -1,5 +1,5 @@
-use crate::cachemap::CacheMap;
 use crate::ieee802154::mac::frame::*;
+use crate::ieee802154::mac::queue::{Queue, QueueError};
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::parse_serialize::Error as ParseError;
 use crate::parse_serialize::{ParseFromBuf, SerializeToBuf};
@@ -8,196 +8,30 @@ use crate::radio_bridge::service::IncomingPacket as RadioPacket;
 use crate::radio_bridge::service::RadioBridgeService as RadioService;
 use crate::radio_bridge::service::RadioRxMode;
 use crate::CloneSpawn;
+use bimap::BiHashMap;
 use bytes::{Bytes, IntoBuf};
-use futures::channel::mpsc;
-use futures::channel::oneshot;
-use futures::future::FutureExt;
-use futures::future::TryFutureExt;
+use futures::future::{Future, TryFutureExt};
 use futures::stream::Stream;
-use futures::stream::StreamExt;
-use futures::task::SpawnExt;
+use futures::task::{Context, Poll};
 use std::collections::HashMap;
-use std::collections::LinkedList;
-use std::ops::DerefMut;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::pin::Pin;
 
-#[derive(Debug)]
-struct Association {
-    short_address: ShortAddress,
-    extended_address: ExtendedAddress,
-    /**
-     * Queue is None when no queue is needed (e.g. the device is receive-while-idle),
-     * Otherwise this is a queue of data to be sent.
-     */
-    queue: Option<Mutex<LinkedList<oneshot::Sender<()>>>>,
-}
-
-impl Association {
-    fn get_queue_slot(&self) -> impl Future<()> {
-        match &self.queue {
-            Some(queue) => {
-                let (sender, receiver) = oneshot::channel::<()>();
-                queue.lock().unwrap().push_back(sender);
-                Box::new(receiver.err_into()) as Box<Future<()> + Unpin + Send>
-            }
-            None => Box::new(futures::future::ok(())),
-        }
-    }
-
-    fn kick(&self) {
-        if let Some(front) = self
-            .queue
-            .as_ref()
-            .and_then(|queue_ref| queue_ref.lock().unwrap().pop_front())
-        {
-            if let Err(_) = front.send(()) {
-                eprintln!("Warning: queue dropped")
-            }
-        }
-    }
-
-    fn has_pending(&self) -> bool {
-        self.queue
-            .as_ref()
-            .map(|queue_ref| !queue_ref.lock().unwrap().is_empty())
-            .unwrap_or(false)
-    }
-}
-
-struct Associations {
-    by_short: HashMap<ShortAddress, Arc<Association>>,
-    by_extended: HashMap<ExtendedAddress, Arc<Association>>,
-}
-
-impl Associations {
-    fn new() -> Associations {
-        Associations {
-            by_short: HashMap::new(),
-            by_extended: HashMap::new(),
-        }
-    }
-
-    fn find_free_short_address(&mut self) -> ShortAddress {
-        let mut short_address: u16 = 0x558B;
-        // TODO: We should add ourselves in this map, so we don't have to explicitly check for
-        // shortaddr 0.
-        while self.by_short.contains_key(&ShortAddress(short_address)) || short_address == 0 {
-            short_address = short_address + 1;
-        }
-        eprintln!("Assigning short address {:?}", short_address);
-        ShortAddress(short_address)
-    }
-
-    fn add(
-        &mut self,
-        address: ExtendedAddress,
-        receive_on_when_idle: bool,
-        request_short_address: Option<ShortAddress>,
-    ) -> ShortAddress {
-        let previous_value = self.by_extended.get(&address);
-        let mut new_queue = if !receive_on_when_idle {
-            Some(LinkedList::new())
-        } else {
-            None
-        };
-        let short_address = match previous_value {
-            Some(current_association) => {
-                let current_association = current_association.clone();
-                // Try to copy old queue
-                if let Some(new_queue) = new_queue.as_mut() {
-                    if let Some(current_queue) = &current_association.queue {
-                        let mut guard = current_queue.lock().unwrap();
-                        std::mem::swap(guard.deref_mut(), new_queue);
-                    }
-                }
-                let short_address = if let Some(request_short_address) = request_short_address {
-                    if request_short_address == current_association.short_address
-                        || !self.by_short.contains_key(&request_short_address)
-                    {
-                        request_short_address
-                    } else {
-                        self.find_free_short_address()
-                    }
-                } else {
-                    current_association.short_address.clone()
-                };
-                if short_address != current_association.short_address {
-                    self.by_short.remove(&current_association.short_address);
-                }
-                short_address
-            }
-            None => {
-                if let Some(request_short_address) = request_short_address {
-                    if !self.by_short.contains_key(&request_short_address) {
-                        request_short_address
-                    } else {
-                        self.find_free_short_address()
-                    }
-                } else {
-                    self.find_free_short_address()
-                }
-            }
-        };
-        let new_association = Association {
-            short_address,
-            extended_address: address.clone(),
-            queue: new_queue.map(Mutex::new),
-        };
-        let new_association = Arc::new(new_association);
-        self.by_short
-            .insert(new_association.short_address, new_association.clone());
-        self.by_extended
-            .insert(new_association.extended_address, new_association);
-        short_address
-    }
-
-    fn get_by_addrspec(&mut self, address: &AddressSpecification) -> Option<Arc<Association>> {
-        match address {
-            AddressSpecification::None => None,
-            AddressSpecification::Reserved => None,
-            AddressSpecification::Short(address) => self.by_short.get(address).map(|x| x.clone()),
-            AddressSpecification::Extended(address) => {
-                self.by_extended.get(address).map(|x| x.clone())
-            }
-        }
-    }
-
-    fn get_queue_slot(&mut self, address: &AddressSpecification) -> impl Future<()> {
-        if let Some(association) = self.get_by_addrspec(address) {
-            Box::new(association.get_queue_slot())
-        } else {
-            Box::new(futures::future::ok(())) as Box<Future<()> + Unpin + Send>
-        }
-    }
-
-    fn kick(&mut self, address: &AddressSpecification) {
-        if let Some(association) = self.get_by_addrspec(address) {
-            association.kick()
-        }
-    }
-
-    fn has_frames_pending(&mut self, address: &AddressSpecification) -> bool {
-        self.get_by_addrspec(address)
-            .map(|assoc| assoc.has_pending())
-            .unwrap_or(false)
-    }
-}
-
-struct InnerService {
-    handle: Mutex<Box<CloneSpawn>>,
-    radio: RadioService,
-    event_sink: mpsc::UnboundedSender<Event>,
-    sequence_number: Mutex<u8>,
-    seen_messages: CacheMap<Frame, ()>,
-    associations: Mutex<Associations>,
+struct NodeInformation {
+    receiver_on_when_idle: bool,
 }
 
 pub struct Service {
-    inner: Arc<InnerService>,
+    handle: Box<CloneSpawn>,
+    packet_stream: Box<Stream<Item = RadioPacket> + Unpin + Send>,
+    radio: RadioService,
+    sequence_number: u8,
     pan_id: PANID,
     short_address: ShortAddress,
     extended_address: ExtendedAddress,
+    associations: BiHashMap<ShortAddress, ExtendedAddress>,
+    nodeinfo: HashMap<ExtendedAddress, NodeInformation>,
+    queue: Queue,
+    inflight: HashMap<AddressSpecification, Box<Future<Output = Result<(), Error>> + Send + Unpin>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -212,136 +46,15 @@ pub enum Event {
 #[derive(Debug)]
 pub enum Error {
     RadioError(RadioError),
-    MPSCError,
+    Unimplemented,
     SerializationError(ParseError),
-}
-impl From<RadioError> for Error {
-    fn from(err: RadioError) -> Self {
-        Error::RadioError(err)
-    }
-}
-impl From<oneshot::Canceled> for Error {
-    fn from(_err: oneshot::Canceled) -> Self {
-        Error::MPSCError
-    }
+    NodeNotAssociated,
+    QueueError(QueueError),
 }
 
-pub trait Future<T> = futures::Future<Output = Result<T, Error>>;
-
-impl InnerService {
-    fn new(
-        spawner: Box<CloneSpawn>,
-        radio: RadioService,
-    ) -> (InnerService, mpsc::UnboundedReceiver<Event>) {
-        let (sender, receiver) = mpsc::unbounded();
-        let seen_messages = CacheMap::new(spawner.clone());
-        (
-            InnerService {
-                handle: Mutex::new(spawner),
-                radio,
-                event_sink: sender,
-                sequence_number: Mutex::new(0),
-                seen_messages,
-                associations: Mutex::new(Associations::new()),
-            },
-            receiver,
-        )
-    }
-    fn push_event(&self, event: Event) {
-        self.event_sink.unbounded_send(event).unwrap()
-    }
-
-    fn fresh_sequence_number(&self) -> u8 {
-        let mut guard = self.sequence_number.lock().unwrap();
-        let retval = *guard;
-        *guard = *guard + 1;
-        retval
-    }
-
-    fn has_frames_pending(&self, frame: &Frame) -> bool {
-        if frame.acknowledge_request && frame.frame_type == FrameType::Command(Command::DataRequest)
-        {
-            self.associations
-                .lock()
-                .unwrap()
-                .has_frames_pending(&frame.source)
-        } else {
-            false
-        }
-    }
-
-    fn on_incoming_frame(&self, frame: Frame, _rssi: u8, _link_quality: u8) {
-        /*
-        if let Some(ack) = frame.create_ack(self.has_frames_pending(&frame)) {
-            self.handle.lock().unwrap().spawn(self.send_raw_frame(ack).map(|res| {
-                if let Err(e) = res {
-                    eprintln!("Unable to send acknowledgement: {:?}", e)
-                }
-            })).unwrap()
-        }
-        */
-        if let Some(_) =
-            self.seen_messages
-                .insert(frame.clone(), (), std::time::Duration::from_secs(2))
-        {
-            //println!("Duplicate frame received!");
-        } else {
-            println!("<< {:?}", frame);
-            match frame.frame_type {
-                FrameType::Command(Command::BeaconRequest) => {
-                    println!("Got a beacon requets :)");
-                    self.push_event(Event::BeaconRequest())
-                }
-                FrameType::Command(Command::DataRequest) => {
-                    // TODO: Check if this frame was actually meant for me...
-                    self.associations.lock().unwrap().kick(&frame.source)
-                }
-                FrameType::Command(Command::AssociationRequest {
-                    receive_on_when_idle,
-                    ..
-                }) => {
-                    // TODO: Check if this was meant for me...
-                    if let AddressSpecification::Extended(ext_source) = frame.source {
-                        self.push_event(Event::AssociationRequest {
-                            source: ext_source,
-                            receive_on_when_idle,
-                        })
-                    } else {
-                        eprintln!(
-                            "Association request without extended source address, confused..."
-                        )
-                    }
-                }
-                _ => println!("Unhandled"),
-            }
-        }
-    }
-
-    fn on_incoming_packet(&self, packet: RadioPacket) {
-        match Frame::parse_from_buf(&mut packet.packet.clone().into_buf()) {
-            Err(e) => eprintln!("Unable to parse MAC packet, {:?}: {:?}", e, packet.packet),
-            Ok(frame) => self.on_incoming_frame(frame, packet.rssi, packet.link_quality),
-        }
-    }
-
-    fn get_queue_slot(&self, addr: &AddressSpecification) -> impl Future<()> {
-        self.associations.lock().unwrap().get_queue_slot(addr)
-    }
-
-    fn send_raw_frame(&self, frame: Frame) -> impl Future<()> {
-        // TODO: This should only return if both the send succeeds, and (if required) an Ack was
-        // received.
-        let mut serialized = vec![];
-        if let Err(e) = frame.serialize_to_buf(&mut serialized) {
-            Box::new(futures::future::err(Error::SerializationError(e)))
-                as Box<Future<()> + Unpin + Send>
-        } else {
-            Box::new(
-                self.radio
-                    .send(serialized.into())
-                    .map_err(Error::RadioError),
-            ) as Box<Future<()> + Unpin + Send>
-        }
+impl From<QueueError> for Error {
+    fn from(item: QueueError) -> Self {
+        Error::QueueError(item)
     }
 }
 
@@ -349,14 +62,11 @@ impl Service {
     pub fn new(
         handle: Box<CloneSpawn>,
         radio: RadioService,
-        packetstream: Box<futures::Stream<Item = RadioPacket> + Unpin + Send>,
+        packet_stream: Box<Stream<Item = RadioPacket> + Send + Unpin>,
         channel: u16,
         short_address: ShortAddress,
         pan_id: PANID,
-    ) -> impl Future<(
-        Service,
-        Box<dyn Stream<Item = Event> + Send + Unpin + 'static>,
-    )> {
+    ) -> impl Future<Output = Result<Service, Error>> + Send {
         let max_power = radio.get_tx_power_max().map_ok(move |pwr| (pwr, radio));
         let set_properties = max_power.and_then(move |(max_power, radio)| {
             let f1 = radio.set_tx_power(max_power);
@@ -368,7 +78,9 @@ impl Service {
                 autoack: true,
                 poll_mode: false,
             });
-            futures::future::try_join5(f1, f2, f3, f4, f5).map_ok(move |_| radio)
+            let f6 = radio.init_pending_data_table();
+            let f56 = futures::future::try_join(f5, f6);
+            futures::future::try_join5(f1, f2, f3, f4, f56).map_ok(move |_| radio)
         });
         let turn_on = set_properties.and_then(|radio| radio.on().map_ok(move |_| radio));
         let extended_address = turn_on.and_then(|radio| {
@@ -376,59 +88,103 @@ impl Service {
                 .get_long_address()
                 .map_ok(move |extaddr| (extaddr, radio))
         });
-        let mut handle = handle;
         let service = extended_address.map_ok(move |(extended_address, radio)| {
-            let (inner, events) = InnerService::new(handle.clone(), radio);
-            let inner = Arc::new(inner);
-            let packet_inner = inner.clone();
-            handle
-                .spawn(packetstream.for_each(move |packet| {
-                    futures::future::ready(packet_inner.on_incoming_packet(packet))
-                }))
-                .unwrap();
-            (
-                Service {
-                    inner,
-                    pan_id,
-                    short_address,
-                    extended_address: ExtendedAddress(extended_address),
-                },
-                Box::new(events) as Box<Stream<Item = Event> + Send + Unpin>,
-            )
+            let extended_address = ExtendedAddress(extended_address);
+            let mut associations = BiHashMap::new();
+            associations.insert(short_address.clone(), extended_address.clone());
+
+            println!("Created service!");
+            Service {
+                handle,
+                packet_stream,
+                radio: radio,
+                sequence_number: 0, // TODO: Random number
+                pan_id,
+                short_address,
+                extended_address,
+                associations: associations,
+                nodeinfo: HashMap::new(),
+                queue: Queue::new(),
+                inflight: HashMap::new(),
+            }
         });
         let service = service.map_err(|e| Error::RadioError(e));
-        //let service = Box::new(service);
         service
     }
 
-    fn fresh_sequence_number(&self) -> u8 {
-        self.inner.fresh_sequence_number()
+    fn handle_frame(&mut self, frame: Frame, _rssi: u8, _link_quality: u8) -> Option<Event> {
+        // TODO: Duplicate frame detection
+        match frame.frame_type {
+            FrameType::Command(Command::BeaconRequest) => Some(Event::BeaconRequest()),
+            FrameType::Command(Command::DataRequest) => {
+                self.queue.on_data_request(frame.source);
+                None
+            }
+            FrameType::Command(Command::AssociationRequest {
+                receive_on_when_idle,
+                ..
+            }) => {
+                if let AddressSpecification::Extended(_pan_id, ext_source) = frame.source {
+                    // TODO: Check if this was meant for us...
+                    Some(Event::AssociationRequest {
+                        source: ext_source,
+                        receive_on_when_idle,
+                    })
+                } else {
+                    eprintln!("Association request without extended source address, confused...");
+                    None
+                }
+            }
+            FrameType::Ack => {
+                if let Some(sequence_nr) = frame.sequence_number {
+                    self.queue.on_ack(sequence_nr)
+                }
+                None
+            }
+            _ => {
+                println!("Unhandled packet");
+                None
+            }
+        }
     }
 
-    pub fn get_pan_id(&self) -> PANID {
-        return self.pan_id;
+    fn handle_packet(&mut self, packet: RadioPacket) -> Option<Event> {
+        match Frame::parse_from_buf(&mut packet.packet.clone().into_buf()) {
+            Err(e) => {
+                eprintln!("Unable to parse MAC packet, {:?}: {:?}", e, packet.packet);
+                None
+            }
+            Ok(frame) => self.handle_frame(frame, packet.rssi, packet.link_quality),
+        }
     }
 
-    pub fn get_short_address(&self) -> ShortAddress {
-        return self.short_address;
+    fn fresh_sequence_number(&mut self) -> u8 {
+        self.sequence_number = self.sequence_number + 1;
+        self.sequence_number
     }
 
-    fn send_raw_frame(&self, frame: Frame) -> impl futures::Future<Output = Result<(), Error>> {
-        let inner_copy = self.inner.clone();
-        self.inner
-            .get_queue_slot(&frame.destination)
-            .and_then(move |_| inner_copy.send_raw_frame(frame))
+    fn send_frame_noqueue(&mut self, frame: Frame) -> impl Future<Output = Result<(), Error>> {
+        let mut serialized = vec![];
+        if let Err(e) = frame.serialize_to_buf(&mut serialized) {
+            Box::new(futures::future::err(Error::SerializationError(e)))
+                as Box<Future<Output = Result<(), Error>> + Unpin + Send>
+        } else {
+            Box::new(
+                self.radio
+                    .send(serialized.into())
+                    .map_err(Error::RadioError),
+            )
+        }
     }
 
-    pub fn send_beacon(&self, payload: Bytes) -> impl futures::Future<Output = Result<(), Error>> {
+    pub fn send_beacon(&mut self, payload: Bytes) -> impl Future<Output = Result<(), Error>> {
+        //TODO: Implement this!
         let beacon = Frame {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: self.fresh_sequence_number().into(),
-            destination_pan: None,
             destination: AddressSpecification::None,
-            source_pan: self.get_pan_id().into(),
-            source: self.get_short_address().into(),
+            source: (self.pan_id.clone(), self.short_address.clone()).into(),
             frame_type: FrameType::Beacon {
                 beacon_order: 15,
                 superframe_order: 15,
@@ -439,33 +195,127 @@ impl Service {
             },
             payload: payload,
         };
-        self.send_raw_frame(beacon)
+        self.send_frame_noqueue(beacon)
     }
 
-    pub fn associate(&self, address: ExtendedAddress, receive_on_when_idle: bool) -> ShortAddress {
-        let mut associations = self.inner.associations.lock().unwrap();
-        associations.add(address, receive_on_when_idle, None)
+    fn find_free_short_address(&self) -> ShortAddress {
+        let mut retval: u16 = 0;
+        while self.associations.contains_left(&ShortAddress(retval)) {
+            retval = retval + 1
+        }
+        ShortAddress(retval)
+    }
+
+    pub fn associate(
+        &mut self,
+        address: ExtendedAddress,
+        receiver_on_when_idle: bool,
+    ) -> ShortAddress {
+        self.nodeinfo.insert(
+            address,
+            NodeInformation {
+                receiver_on_when_idle,
+            },
+        );
+        match self.associations.get_by_right(&address) {
+            Some(left) => left.clone(),
+            None => {
+                let short_address = self.find_free_short_address();
+                self.associations.insert(short_address.clone(), address);
+                short_address
+            }
+        }
+    }
+
+    fn get_nodeinfo_for_addrspec(&self, addr: &AddressSpecification) -> Option<&NodeInformation> {
+        match addr {
+            AddressSpecification::None => None,
+            AddressSpecification::Short(panid, address) => {
+                if panid.clone() == self.pan_id {
+                    let extaddr = self.associations.get_by_left(address);
+                    let nodeinfo = extaddr.and_then(|extaddr| self.nodeinfo.get(extaddr));
+                    nodeinfo
+                } else {
+                    None
+                }
+            }
+            AddressSpecification::Extended(_, address) => self.nodeinfo.get(address),
+        }
+    }
+
+    fn send_frame_queued(&mut self, frame: Frame) -> impl Future<Output = Result<(), Error>> {
+        let receiver_on_when_idle = self
+            .get_nodeinfo_for_addrspec(&frame.destination)
+            .map(|x| x.receiver_on_when_idle)
+            .unwrap_or(true);
+        self.queue.enqueue(frame, receiver_on_when_idle).err_into()
     }
 
     pub fn send_association_response(
-        &self,
-        target: ExtendedAddress,
-        short_address: ShortAddress,
-    ) -> impl Future<()> {
-        let response = Frame {
-            frame_pending: false,
-            acknowledge_request: true,
-            sequence_number: self.fresh_sequence_number().into(),
-            destination_pan: Some(self.pan_id),
-            destination: target.into(),
-            source_pan: Some(self.pan_id),
-            source: self.extended_address.into(),
-            frame_type: FrameType::Command(Command::AssociationResponse {
-                short_address: short_address,
-                status: AssociationResponseStatus::AssociationSuccessful,
-            }),
-            payload: Bytes::new(),
-        };
-        self.send_raw_frame(response)
+        &mut self,
+        extended_address: ExtendedAddress,
+    ) -> impl Future<Output = Result<(), Error>> {
+        if let Some(short_address) = self.associations.get_by_right(&extended_address) {
+            let short_address = short_address.clone();
+            let frame = Frame {
+                frame_pending: false,
+                acknowledge_request: true,
+                sequence_number: self.fresh_sequence_number().into(),
+                destination: (self.pan_id, extended_address.clone()).into(),
+                source: (self.pan_id, self.extended_address).into(),
+                frame_type: FrameType::Command(Command::AssociationResponse {
+                    short_address: short_address,
+                    status: AssociationResponseStatus::AssociationSuccessful,
+                }),
+                payload: Bytes::new(),
+            };
+            Box::new(self.send_frame_queued(frame))
+        } else {
+            Box::new(futures::future::err(Error::NodeNotAssociated))
+                as Box<Future<Output = Result<(), Error>> + Send + Unpin>
+        }
+    }
+}
+
+impl Stream for Service {
+    type Item = Event;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let uself = self.get_mut();
+        // Parse incoming packets, and if needed, poop out events.
+        while let Poll::Ready(packet) = Pin::new(&mut uself.packet_stream).poll_next(cx) {
+            if let Some(packet) = packet {
+                if let Some(event) = uself.handle_packet(packet) {
+                    return Poll::Ready(Some(event));
+                }
+            } else {
+                eprintln!("Radio packet stream finished :(");
+            }
+        }
+
+        // Poll the queue
+        while let Poll::Ready(outgoing) = Pin::new(&mut uself.queue).poll_next(cx) {
+            if let Some((destination, frame)) = outgoing {
+                let fut = Box::new(uself.send_frame_noqueue(frame));
+                uself.inflight.insert(destination, fut);
+            } else {
+                eprintln!("Queue stream finished :(");
+            }
+        }
+
+        // Poll inflight packets
+        let mut results = Vec::new();
+        uself.inflight.retain(|key, value| {
+            if let Poll::Ready(res) = Pin::new(value).poll(cx) {
+                results.push((key.clone(), res));
+                false
+            } else {
+                true
+            }
+        });
+        for (key, value) in results.into_iter() {
+            uself.queue.on_send_result(key, value.is_ok());
+        }
+        Poll::Pending
     }
 }

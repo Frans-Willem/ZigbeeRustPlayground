@@ -12,12 +12,11 @@ use std::convert::{TryFrom, TryInto};
 
 /*=== Publicly accessible structures & enums ===*/
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum AddressSpecification {
     None,
-    Reserved,
-    Short(ShortAddress),
-    Extended(ExtendedAddress),
+    Short(PANID, ShortAddress),
+    Extended(PANID, ExtendedAddress),
 }
 
 #[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
@@ -89,9 +88,7 @@ pub struct Frame {
     pub frame_pending: bool,
     pub acknowledge_request: bool,
     pub sequence_number: Option<u8>,
-    pub destination_pan: Option<PANID>,
     pub destination: AddressSpecification,
-    pub source_pan: Option<PANID>,
     pub source: AddressSpecification,
     pub frame_type: FrameType,
     pub payload: Bytes,
@@ -110,27 +107,33 @@ impl Frame {
                 frame_pending,
                 acknowledge_request: false,
                 sequence_number: self.sequence_number,
-                destination_pan: None,
                 destination: AddressSpecification::None,
-                source_pan: None,
                 source: AddressSpecification::None,
                 frame_type: FrameType::Ack,
                 payload: Bytes::new(),
             })
         }
     }
-}
 
-/*=== Into & From implementations */
-impl From<ShortAddress> for AddressSpecification {
-    fn from(item: ShortAddress) -> Self {
-        AddressSpecification::Short(item)
+    pub fn expect_ack(&self) -> Option<u8> {
+        if !self.acknowledge_request {
+            None
+        } else {
+            self.sequence_number
+        }
     }
 }
 
-impl From<ExtendedAddress> for AddressSpecification {
-    fn from(item: ExtendedAddress) -> Self {
-        AddressSpecification::Extended(item)
+/*=== Into & From implementations */
+impl From<(PANID, ShortAddress)> for AddressSpecification {
+    fn from(item: (PANID, ShortAddress)) -> Self {
+        AddressSpecification::Short(item.0, item.1)
+    }
+}
+
+impl From<(PANID, ExtendedAddress)> for AddressSpecification {
+    fn from(item: (PANID, ExtendedAddress)) -> Self {
+        AddressSpecification::Extended(item.0, item.1)
     }
 }
 
@@ -142,6 +145,16 @@ where
         match item {
             None => AddressSpecification::None,
             Some(x) => x.into(),
+        }
+    }
+}
+
+impl Into<Option<PANID>> for AddressSpecification {
+    fn into(self) -> Option<PANID> {
+        match self {
+            AddressSpecification::None => None,
+            AddressSpecification::Short(panid, _) => Some(panid),
+            AddressSpecification::Extended(panid, _) => Some(panid),
         }
     }
 }
@@ -255,44 +268,63 @@ bitfield! {
 default_parse_serialize_newtype!(AssociationRequest, u8);
 
 /*=== Serialization & parsing ===*/
-impl ParseFromBufTagged<u16> for AddressSpecification {
-    fn parse_from_buf(mode: u16, buf: &mut Buf) -> ParseResult<AddressSpecification> {
-        match mode {
+impl AddressSpecification {
+    fn parse_from_buf(
+        buf: &mut Buf,
+        addressing_mode: u16,
+        use_panid: Option<PANID>,
+    ) -> Result<AddressSpecification, ParseError> {
+        match addressing_mode {
             0 => Ok(AddressSpecification::None),
-            1 => Ok(AddressSpecification::Reserved),
-            2 => Ok(AddressSpecification::Short(ShortAddress::parse_from_buf(
-                buf,
-            )?)),
-            3 => Ok(AddressSpecification::Extended(
-                ExtendedAddress::parse_from_buf(buf)?,
-            )),
+            1 => Err(ParseError::Unimplemented(
+                "Unable to parse Frame with 'Reserved' address specification",
+            ))?,
+            2 => {
+                let panid = match use_panid {
+                    None => PANID::parse_from_buf(buf)?,
+                    Some(panid) => panid,
+                };
+                let address = ShortAddress::parse_from_buf(buf)?;
+                Ok(AddressSpecification::Short(panid, address))
+            }
+            3 => {
+                let panid = match use_panid {
+                    None => PANID::parse_from_buf(buf)?,
+                    Some(panid) => panid,
+                };
+                let address = ExtendedAddress::parse_from_buf(buf)?;
+                Ok(AddressSpecification::Extended(panid, address))
+            }
             _ => Err(ParseError::UnexpectedData),
         }
     }
-}
 
-impl SerializeToBuf for AddressSpecification {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+    fn serialize_to_buf(&self, buf: &mut BufMut, skip_panid: bool) -> Result<(), ParseError> {
         match self {
             AddressSpecification::None => Ok(()),
-            AddressSpecification::Reserved => Ok(()),
-            AddressSpecification::Short(x) => x.serialize_to_buf(buf),
-            AddressSpecification::Extended(x) => x.serialize_to_buf(buf),
+            AddressSpecification::Short(panid, address) => {
+                if !skip_panid {
+                    panid.serialize_to_buf(buf)?;
+                }
+                address.serialize_to_buf(buf)
+            }
+            AddressSpecification::Extended(panid, address) => {
+                if !skip_panid {
+                    panid.serialize_to_buf(buf)?;
+                }
+                address.serialize_to_buf(buf)
+            }
         }
     }
-}
 
-impl SerializeToBufTagged<u16> for AddressSpecification {
     fn get_serialize_tag(&self) -> Result<u16, ParseError> {
         Ok(match self {
             AddressSpecification::None => 0,
-            AddressSpecification::Reserved => 1,
-            AddressSpecification::Short(_) => 2,
-            AddressSpecification::Extended(_) => 3,
+            AddressSpecification::Short(_, _) => 2,
+            AddressSpecification::Extended(_, _) => 3,
         })
     }
 }
-
 impl ParseFromBuf for Command {
     fn parse_from_buf(buf: &mut Buf) -> Result<Command, ParseError> {
         let command_id = u8::parse_from_buf(buf)?;
@@ -443,30 +475,25 @@ impl ParseFromBuf for Frame {
         } else {
             Some(u8::parse_from_buf(buf)?)
         };
-        let destination_pan = if fsf.destination_addressing_mode() == 0 {
-            None
-        } else {
-            Some(PANID::parse_from_buf(buf)?)
-        };
         let destination =
-            AddressSpecification::parse_from_buf(fsf.destination_addressing_mode(), buf)?;
-        let source_pan = if fsf.source_addressing_mode() == 0 {
-            None
-        } else if fsf.pan_id_compression() != 0 {
-            destination_pan.clone()
+            AddressSpecification::parse_from_buf(buf, fsf.destination_addressing_mode(), None)?;
+        let source_pan_compression: Option<PANID> = if fsf.pan_id_compression() != 0 {
+            destination.into()
         } else {
-            Some(PANID::parse_from_buf(buf)?)
+            None
         };
-        let source = AddressSpecification::parse_from_buf(fsf.source_addressing_mode(), buf)?;
+        let source = AddressSpecification::parse_from_buf(
+            buf,
+            fsf.source_addressing_mode(),
+            source_pan_compression,
+        )?;
         let frame_type = FrameType::parse_from_buf(fsf.frame_type(), buf)?;
         let payload = buf.collect();
         Ok(Frame {
             frame_pending,
             acknowledge_request,
             sequence_number,
-            destination_pan,
             destination,
-            source_pan,
             source,
             frame_type,
             payload,
@@ -485,9 +512,7 @@ fn test_parse_mac_frame() {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(165),
-            destination_pan: Some(PANID(0xFFFF)),
-            destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
-            source_pan: None,
+            destination: (PANID::broadcast(), ShortAddress::broadcast()).into(),
             source: AddressSpecification::None,
             frame_type: FrameType::Command(Command::BeaconRequest),
             payload: Bytes::new()
@@ -507,10 +532,8 @@ fn test_parse_mac_frame() {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(1),
-            destination_pan: Some(PANID(0x7698)),
-            destination: AddressSpecification::Short(ShortAddress(0xFFFF)),
-            source_pan: Some(PANID(0x7698)),
-            source: AddressSpecification::Short(ShortAddress(0)),
+            destination: (PANID(0x7698), ShortAddress::broadcast()).into(),
+            source: (PANID(0x7698), ShortAddress(0)).into(),
             frame_type: FrameType::Data,
             payload: Bytes::from(&input[9..])
         }
@@ -528,10 +551,8 @@ fn test_parse_mac_frame() {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(64),
-            source_pan: Some(PANID(0x7698)),
-            source: AddressSpecification::Short(ShortAddress(0)),
-            destination_pan: None,
             destination: AddressSpecification::None,
+            source: (PANID(0x7698), ShortAddress(0)).into(),
             frame_type: FrameType::Beacon {
                 beacon_order: 15,
                 superframe_order: 15,
@@ -552,9 +573,10 @@ impl SerializeToBuf for Frame {
         fsf.set_security_enabled(0);
         fsf.set_frame_pending(self.frame_pending.into());
         fsf.set_acknowledge_request(self.acknowledge_request.into());
-        fsf.set_pan_id_compression(
-            (self.source_pan == self.destination_pan && self.source_pan.is_some()).into(),
-        );
+        let destination_pan: Option<PANID> = self.destination.into();
+        let source_pan: Option<PANID> = self.source.into();
+        let pan_id_compression = source_pan == destination_pan && source_pan.is_some();
+        fsf.set_pan_id_compression(pan_id_compression.into());
         fsf.set_reserved(0);
         fsf.set_sequence_number_supression(self.sequence_number.is_none().into());
         fsf.set_information_elements_present(0);
@@ -565,16 +587,8 @@ impl SerializeToBuf for Frame {
         if let Some(x) = self.sequence_number {
             x.serialize_to_buf(buf)?;
         }
-        if let Some(x) = self.destination_pan {
-            x.serialize_to_buf(buf)?;
-        }
-        self.destination.serialize_to_buf(buf)?;
-        if self.source_pan != self.destination_pan {
-            if let Some(x) = self.source_pan {
-                x.serialize_to_buf(buf)?;
-            }
-        }
-        self.source.serialize_to_buf(buf)?;
+        self.destination.serialize_to_buf(buf, false)?;
+        self.source.serialize_to_buf(buf, pan_id_compression)?;
         self.frame_type.serialize_to_buf(buf)?;
         self.payload.serialize_to_buf(buf)?;
         Ok(())
@@ -587,10 +601,8 @@ fn test_serialize_mac_frame() {
         frame_pending: false,
         acknowledge_request: false,
         sequence_number: Some(64),
-        destination_pan: None,
         destination: AddressSpecification::None,
-        source_pan: PANID(0x7698).into(),
-        source: ShortAddress(0).into(),
+        source: (PANID(0x7698), ShortAddress(0)).into(),
         frame_type: FrameType::Beacon {
             beacon_order: 15,
             superframe_order: 15,
@@ -615,10 +627,8 @@ fn test_serialize_mac_frame() {
         frame_pending: false,
         acknowledge_request: true,
         sequence_number: Some(10),
-        destination_pan: PANID(0x7698).into(),
-        destination: ExtendedAddress(0xd0cf5efffe1c6306).into(),
-        source_pan: PANID(0x7698).into(),
-        source: ExtendedAddress(0x00124b000e896815).into(),
+        destination: (PANID(0x7698), ExtendedAddress(0xd0cf5efffe1c6306)).into(),
+        source: (PANID(0x7698), ExtendedAddress(0x00124b000e896815)).into(),
         frame_type: FrameType::Command(Command::AssociationResponse {
             short_address: ShortAddress(0x558b),
             status: AssociationResponseStatus::AssociationSuccessful,

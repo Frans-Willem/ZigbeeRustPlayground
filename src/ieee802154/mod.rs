@@ -9,6 +9,10 @@ impl ShortAddress {
         let ShortAddress(retval) = self;
         *retval
     }
+
+    pub fn broadcast() -> Self {
+        ShortAddress(0xFFFF)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -23,5 +27,9 @@ impl PANID {
     pub fn as_u16(&self) -> u16 {
         let PANID(retval) = self;
         *retval
+    }
+
+    pub fn broadcast() -> Self {
+        PANID(0xFFFF)
     }
 }
