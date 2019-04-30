@@ -1,4 +1,5 @@
 use crate::ieee802154::mac::frame::*;
+use crate::ieee802154::mac::pending_handler::PendingHandler;
 use crate::ieee802154::mac::queue::{Queue, QueueError};
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::parse_serialize::Error as ParseError;
@@ -10,9 +11,9 @@ use crate::radio_bridge::service::RadioRxMode;
 use crate::CloneSpawn;
 use bimap::BiHashMap;
 use bytes::{Bytes, IntoBuf};
-use futures::future::{Future, TryFutureExt};
+use futures::future::{Future, FutureExt, TryFutureExt};
 use futures::stream::Stream;
-use futures::task::{Context, Poll};
+use futures::task::{Context, Poll, SpawnExt};
 use std::collections::HashMap;
 use std::pin::Pin;
 
@@ -32,6 +33,8 @@ pub struct Service {
     nodeinfo: HashMap<ExtendedAddress, NodeInformation>,
     queue: Queue,
     inflight: HashMap<AddressSpecification, Box<Future<Output = Result<(), Error>> + Send + Unpin>>,
+    pending_ext: PendingHandler<u8, ExtendedAddress>,
+    pending_short: PendingHandler<u8, (PANID, ShortAddress)>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -106,6 +109,8 @@ impl Service {
                 nodeinfo: HashMap::new(),
                 queue: Queue::new(),
                 inflight: HashMap::new(),
+                pending_ext: PendingHandler::new(vec![0, 1, 2, 3, 4, 5, 6, 7]),
+                pending_short: PendingHandler::new(vec![0, 1, 2, 3, 4, 5, 6, 7]),
             }
         });
         let service = service.map_err(|e| Error::RadioError(e));
@@ -117,7 +122,8 @@ impl Service {
         match frame.frame_type {
             FrameType::Command(Command::BeaconRequest) => Some(Event::BeaconRequest()),
             FrameType::Command(Command::DataRequest) => {
-                self.queue.on_data_request(frame.source);
+                let pending_frames = self.queue.on_data_request(frame.source);
+                self.set_pending_data(&frame.source, pending_frames);
                 None
             }
             FrameType::Command(Command::AssociationRequest {
@@ -243,11 +249,109 @@ impl Service {
         }
     }
 
+    fn set_pending_data_ext(&mut self, address: ExtendedAddress, pending_frames: bool) {
+        if pending_frames {
+            if let Some(write_slot) = self.pending_ext.promote(address) {
+                eprintln!(
+                    "Setting ExtAddr Pending slot {} to {:?}",
+                    write_slot, address
+                );
+                self.handle
+                    .spawn(
+                        self.radio
+                            .set_pending_data_ext(write_slot as usize, Some(address.as_u64()))
+                            .map(|res| {
+                                if let Err(e) = res {
+                                    eprintln!(
+                                        "Unable to set pending extended address slot {:?}",
+                                        e
+                                    );
+                                }
+                            }),
+                    )
+                    .unwrap();
+            }
+        } else {
+            if let Some(clear_slot) = self.pending_ext.clear(address) {
+                eprintln!("Clearing ExtAddr Pending slot {}", clear_slot);
+                self.handle
+                    .spawn(
+                        self.radio
+                            .set_pending_data_ext(clear_slot as usize, None)
+                            .map(|res| {
+                                if let Err(e) = res {
+                                    eprintln!(
+                                        "Unable to clear pending extended address slot {:?}",
+                                        e
+                                    );
+                                }
+                            }),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn set_pending_data_short(
+        &mut self,
+        pan_id: PANID,
+        address: ShortAddress,
+        pending_frames: bool,
+    ) {
+        if pending_frames {
+            if let Some(write_slot) = self.pending_short.promote((pan_id, address)) {
+                self.handle
+                    .spawn(
+                        self.radio
+                            .set_pending_data_short(
+                                write_slot as usize,
+                                Some((pan_id.as_u16(), address.as_u16())),
+                            )
+                            .map(|res| {
+                                if let Err(e) = res {
+                                    eprintln!("Unable to set pending short address slot {:?}", e);
+                                }
+                            }),
+                    )
+                    .unwrap();
+            }
+        } else {
+            if let Some(clear_slot) = self.pending_short.clear((pan_id, address)) {
+                self.handle
+                    .spawn(
+                        self.radio
+                            .set_pending_data_short(clear_slot as usize, None)
+                            .map(|res| {
+                                if let Err(e) = res {
+                                    eprintln!("Unable to clear pending short address slot {:?}", e);
+                                }
+                            }),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn set_pending_data(&mut self, address: &AddressSpecification, pending_frames: bool) {
+        match address {
+            AddressSpecification::None => (),
+            AddressSpecification::Short(panid, address) => {
+                self.set_pending_data_short(panid.clone(), address.clone(), pending_frames)
+            }
+            AddressSpecification::Extended(_, address) => {
+                self.set_pending_data_ext(address.clone(), pending_frames)
+            }
+        }
+    }
+
     fn send_frame_queued(&mut self, frame: Frame) -> impl Future<Output = Result<(), Error>> {
         let receiver_on_when_idle = self
             .get_nodeinfo_for_addrspec(&frame.destination)
             .map(|x| x.receiver_on_when_idle)
             .unwrap_or(true);
+        if !receiver_on_when_idle {
+            self.set_pending_data(&frame.destination, true);
+        }
         self.queue.enqueue(frame, receiver_on_when_idle).err_into()
     }
 
