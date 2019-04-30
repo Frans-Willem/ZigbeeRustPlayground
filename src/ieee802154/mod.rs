@@ -19,6 +19,12 @@ impl ShortAddress {
 pub struct ExtendedAddress(pub u64);
 default_parse_serialize_newtype!(ExtendedAddress, u64);
 
+impl ExtendedAddress {
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PANID(pub u16);
 default_parse_serialize_newtype!(PANID, u16);
