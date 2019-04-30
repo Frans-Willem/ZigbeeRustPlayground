@@ -307,24 +307,19 @@ impl Queue {
     fn handle_action(&mut self, destination: AddressSpecification, action: AddressQueueAction) {
         match action {
             AddressQueueAction::StartTimer(duration) => {
-                eprintln!("Starting timer: {:?} {:?}", destination, duration);
                 if let Some(key) = self.running_timers.get(&destination) {
-                    eprintln!("Re-set");
                     self.timers.reset(key, duration)
                 } else {
-                    eprintln!("Insert");
                     self.running_timers
                         .insert(destination, self.timers.insert(destination, duration));
                 }
             }
             AddressQueueAction::StopTimer() => {
-                eprintln!("Stopping timer {:?}", destination);
                 if let Some(key) = self.running_timers.remove(&destination) {
                     self.timers.remove(&key);
                 }
             }
             AddressQueueAction::StopTimerStartSend(frame) => {
-                eprintln!("Stopping timer {:?}", destination);
                 if let Some(key) = self.running_timers.remove(&destination) {
                     self.timers.remove(&key);
                 }
@@ -390,8 +385,16 @@ impl Queue {
         });
     }
 
-    pub fn on_data_request(&mut self, destination: AddressSpecification) {
-        self.update_and_handle_action(destination, AddressQueue::on_data_request)
+    /**
+     * Returns true if there is still data pending for this address,
+     * or false when no data is pending.
+     */
+    pub fn on_data_request(&mut self, destination: AddressSpecification) -> bool {
+        self.update_and_handle_action(destination.clone(), AddressQueue::on_data_request);
+        self.queues
+            .get(&destination)
+            .map(|state| !state.is_default())
+            .unwrap_or(false)
     }
 }
 
