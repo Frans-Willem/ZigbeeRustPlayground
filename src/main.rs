@@ -11,6 +11,7 @@ extern crate enum_tryfrom;
 extern crate futures;
 extern crate bimap;
 
+mod mru_set;
 #[macro_use]
 mod parse_serialize;
 mod cachemap;
