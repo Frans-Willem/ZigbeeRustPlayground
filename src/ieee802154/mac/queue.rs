@@ -1,9 +1,10 @@
 use crate::delayqueue::DelayQueue;
 use crate::delayqueue::Key as DelayQueueKey;
 use crate::ieee802154::mac::frame::{AddressSpecification, Frame};
+use crate::saved_waker::SavedWaker;
 use futures::future::Future;
 use futures::stream::Stream;
-use futures::task::{Context, Poll, Waker};
+use futures::task::{Context, Poll};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::time::Duration;
@@ -20,7 +21,7 @@ pub struct Queue {
     timers: DelayQueue<AddressSpecification>,
     running_timers: HashMap<AddressSpecification, DelayQueueKey>,
     outgoing: VecDeque<(AddressSpecification, Frame)>,
-    waker: Option<Waker>,
+    stream_waker: SavedWaker,
 }
 
 impl Queue {
@@ -31,13 +32,7 @@ impl Queue {
             timers: DelayQueue::new(),
             running_timers: HashMap::new(),
             outgoing: VecDeque::new(),
-            waker: None,
-        }
-    }
-    fn wake(&mut self) {
-        eprintln!("Waking");
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
+            stream_waker: SavedWaker::new(),
         }
     }
 
@@ -61,7 +56,7 @@ impl Queue {
                     self.timers.remove(&key);
                 }
                 self.outgoing.push_back((destination, frame));
-                self.wake();
+                self.stream_waker.wake();
             }
         }
     }
@@ -144,8 +139,8 @@ impl Stream for Queue {
     type Item = (AddressSpecification, Frame);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut uself = self.get_mut();
-        uself.waker = Some(cx.waker().clone());
+        let uself = self.get_mut();
+        uself.stream_waker.set(cx);
 
         // Handle all timers
         while let Poll::Ready(Some(timer_event)) = Pin::new(&mut uself.timers).poll_next(cx) {

@@ -17,8 +17,9 @@ mod parse_serialize;
 mod cachemap;
 mod delayqueue;
 mod ieee802154;
-mod map_update;
 mod radio_bridge;
+mod saved_waker;
+
 use futures::compat::*;
 
 use futures::task::{Spawn, SpawnExt};
