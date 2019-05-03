@@ -8,23 +8,22 @@
  * response the first time, as long as the second time the on-MCU cache is updated.
  */
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::hash::Hash;
 
 #[derive(Debug)]
-pub struct MRUSetEntry<T> {
-    value: T,
-    newer: Option<T>,    // Points to first newer entry after this.
-    older: Option<T>,    // Points to first older entry after this.
-    slot: Option<usize>, // Slot used by this entry.
-}
-
-#[derive(Debug)]
-pub struct MRUSet<T> where T: Eq + Hash {
-    map: HashMap<T, MRUSetEntry<T>>, // Entries with data
-    newest: Option<T>,               // Points to the newest entry
-    oldest_slotted: Option<T>,       // Points to the oldest entry with a slot.
-    free_slots: VecDeque<usize>,     // List of free slots.
+pub struct MRUSet<T>
+where
+    T: Eq + Hash + Clone,
+{
+    entries: HashSet<T>,               // All entries in this set
+    assigned_slots: HashMap<T, usize>, // Entries with slots assigned.
+    link_newer: HashMap<T, T>,         // Links from entry to an entry one newer
+    link_older: HashMap<T, T>,         // Links from an entry to one older
+    newest: Option<T>,
+    oldest_slotted: Option<T>,
+    free_slots: VecDeque<usize>, // List of free slots.
 }
 
 #[derive(PartialEq, Debug)]
@@ -34,6 +33,22 @@ pub enum MRUSetAction<T> {
     SetSlot(usize, T),
 }
 
+trait InsertOrRemove<K, V> {
+    fn insert_or_remove(&mut self, key: &K, value: Option<V>) -> Option<V>;
+}
+
+impl<K, V> InsertOrRemove<K, V> for HashMap<K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    fn insert_or_remove(&mut self, key: &K, value: Option<V>) -> Option<V> {
+        match value {
+            Some(value) => self.insert(key.clone(), value),
+            None => self.remove(key),
+        }
+    }
+}
+
 impl<T> MRUSet<T>
 where
     T: Hash + Eq + Clone,
@@ -41,7 +56,10 @@ where
     pub fn new(num_slots: usize) -> MRUSet<T> {
         assert_ne!(num_slots, 0);
         MRUSet {
-            map: HashMap::new(),
+            entries: HashSet::new(),
+            link_newer: HashMap::new(),
+            link_older: HashMap::new(),
+            assigned_slots: HashMap::new(),
             newest: None,
             oldest_slotted: None,
             free_slots: (0..num_slots).collect(),
@@ -49,78 +67,49 @@ where
     }
 
     pub fn contains(&self, item: &T) -> bool {
-        self.map.contains_key(item)
+        self.entries.contains(item)
     }
 
-    fn unlink(&mut self, item: &T) -> bool {
-        // Reset older & newer on entry, and temporarily store their old values.
-        let (existed, newer, older) = if let Some(entry) = self.map.get_mut(item) {
-            (true, entry.newer.take(), entry.older.take())
-        } else {
-            (false, None, None)
-        };
-        // Update newer and older entry
-        if let Some(newer) = newer.clone() {
-            if let Some(newer_entry) = self.map.get_mut(&newer) {
-                newer_entry.older = older.clone();
-            }
+    fn unlink(&mut self, item: &T) {
+        // Remove links
+        let newer = self.link_newer.remove(item);
+        let older = self.link_older.remove(item);
+
+        // Update newer and older items to no longer point to us.
+        if let Some(newer) = newer.as_ref() {
+            assert!(self.link_older.insert_or_remove(newer, older.clone()) == Some(item.clone()));
         }
-        if let Some(older) = older.clone() {
-            if let Some(older_entry) = self.map.get_mut(&older) {
-                older_entry.newer = newer.clone();
-            }
+        if let Some(older) = older.as_ref() {
+            assert!(self.link_newer.insert_or_remove(older, newer.clone()) == Some(item.clone()));
         }
-        // Update newest & oldest_slotted entries
-        if self.newest == Some(item.clone()) {
+
+        // Update newest & oldest slotted
+        if self.newest.as_ref() == Some(item) {
             self.newest = older;
         }
-        if self.oldest_slotted == Some(item.clone()) {
+
+        if self.oldest_slotted.as_ref() == Some(item) {
             self.oldest_slotted = newer;
         }
-        existed
     }
 
-    fn link_as_newest(&mut self, item: &T) -> MRUSetAction<T> {
+    fn link_as_newest(&mut self, item: &T) {
         let second_newest = self.newest.replace(item.clone());
-        let (slot, action) = if let Some(current_slot) = self.has_slot(item) {
-            (Some(current_slot), MRUSetAction::None)
-        } else {
-            if let Some(new_slot) = self.take_oldest_slot() {
-                (
-                    Some(new_slot),
-                    MRUSetAction::SetSlot(new_slot, item.clone()),
-                )
-            } else {
-                eprintln!("Unable to assign slot!");
-                (None, MRUSetAction::None)
-            }
-        };
 
-        if let Some(entry) = self.map.get_mut(item) {
-            assert!(entry.newer.is_none());
-            assert!(entry.older.is_none());
-            entry.slot = slot;
-            entry.older = second_newest.clone();
-        } else {
-            self.map.insert(
-                item.clone(),
-                MRUSetEntry {
-                    value: item.clone(),
-                    newer: None,
-                    older: second_newest.clone(),
-                    slot,
-                },
-            );
+        if let Some(second_newest) = second_newest.as_ref() {
+            assert!(self
+                .link_newer
+                .insert(second_newest.clone(), item.clone())
+                .is_none());
         }
-        if let Some(second_newest_entry) = second_newest.and_then(|second_newest| self.map.get_mut(&second_newest)) {
-            assert!(second_newest_entry.newer.is_none());
-            second_newest_entry.newer.replace(item.clone());
-        }
+        assert!(self
+            .link_older
+            .insert_or_remove(item, second_newest)
+            .is_none());
+        // Update oldest slotted
         if let None = self.oldest_slotted {
             self.oldest_slotted = Some(item.clone())
         }
-
-        action
     }
 
     fn take_oldest_slot(&mut self) -> Option<usize> {
@@ -129,25 +118,33 @@ where
         } else {
             // Given that we have more than one slot, and there are no free ones,
             // there must be an entry in self.oldest_slotted, and that entry must exist.
-            let oldest = self.oldest_slotted.take()?;
-            let oldest_entry = self.map.get_mut(&oldest)?;
-            self.oldest_slotted = oldest_entry.newer.clone();
-            oldest_entry.slot.take()
+            let oldest_slotted = self.oldest_slotted.take()?;
+            self.oldest_slotted = self.link_newer.get(&oldest_slotted).cloned();
+            self.assigned_slots.remove(&oldest_slotted)
         }
     }
 
     pub fn has_slot(&self, item: &T) -> Option<usize> {
-        self.map.get(item).and_then(|entry| entry.slot)
+        self.assigned_slots.get(item).cloned()
     }
 
     pub fn insert(&mut self, item: &T) -> MRUSetAction<T> {
         // Are we already the newest entry ?
         // If so, there's no need to do anything.
-        if self.newest == Some(item.clone()) {
+        if self.newest.as_ref() == Some(item) {
             MRUSetAction::None
         } else {
+            self.entries.insert(item.clone());
             self.unlink(item);
-            self.link_as_newest(item)
+            let (retval, slot) = if let Some(assigned_slot) = self.assigned_slots.remove(item) {
+                (MRUSetAction::None, assigned_slot)
+            } else {
+                let slot = self.take_oldest_slot().unwrap();
+                (MRUSetAction::SetSlot(slot, item.clone()), slot)
+            };
+            self.assigned_slots.insert(item.clone(), slot);
+            self.link_as_newest(item);
+            retval
         }
     }
 
@@ -158,12 +155,15 @@ where
      *
      */
     fn reassign_slot(&mut self, slot: usize) -> Option<T> {
-        if let Some(next_item_in_line) = self.oldest_slotted.clone().and_then(|item| self.map.get(&item)).and_then(|entry| entry.older.clone()) {
-            let entry = self.map.get_mut(&next_item_in_line).unwrap();
-            assert!(entry.slot.is_none());
-            entry.slot.replace(slot);
-            self.oldest_slotted.replace(next_item_in_line.clone());
-            Some(next_item_in_line)
+        if let Some(next_in_line) = self
+            .oldest_slotted
+            .as_ref()
+            .and_then(|item| self.link_older.get(item))
+        {
+            let next_in_line = next_in_line.clone();
+            self.assigned_slots.insert(next_in_line.clone(), slot);
+            self.oldest_slotted.replace(next_in_line.clone());
+            Some(next_in_line)
         } else {
             self.free_slots.push_back(slot);
             None
@@ -172,14 +172,13 @@ where
 
     pub fn remove(&mut self, item: &T) -> MRUSetAction<T> {
         self.unlink(item);
-        let slot = self.map.remove(item).and_then(|entry| entry.slot);
-        if let Some(slot) = slot {
+        self.entries.remove(item);
+        if let Some(slot) = self.assigned_slots.remove(item) {
             match self.reassign_slot(slot) {
                 Some(new_item) => MRUSetAction::SetSlot(slot, new_item),
                 None => MRUSetAction::ClearSlot(slot),
             }
         } else {
-            // Removed entry didn't have a slot, so no action needed
             MRUSetAction::None
         }
     }
