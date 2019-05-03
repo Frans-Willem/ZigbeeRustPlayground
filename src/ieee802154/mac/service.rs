@@ -1,6 +1,6 @@
 use crate::ieee802154::mac::frame::*;
-use crate::ieee802154::mac::pending_handler::PendingHandler;
-use crate::ieee802154::mac::queue::{Queue, QueueError};
+use crate::ieee802154::mac::mru_address_set::{MRUAddressSet, MRUAddressSetAction};
+use crate::ieee802154::mac::queue::{Queue, QueueError, QueueEvent};
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::parse_serialize::Error as ParseError;
 use crate::parse_serialize::{ParseFromBuf, SerializeToBuf};
@@ -33,8 +33,7 @@ pub struct Service {
     nodeinfo: HashMap<ExtendedAddress, NodeInformation>,
     queue: Queue,
     inflight: HashMap<AddressSpecification, Box<Future<Output = Result<(), Error>> + Send + Unpin>>,
-    pending_ext: PendingHandler<u8, ExtendedAddress>,
-    pending_short: PendingHandler<u8, (PANID, ShortAddress)>,
+    pending_data_set: MRUAddressSet,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -109,8 +108,7 @@ impl Service {
                 nodeinfo: HashMap::new(),
                 queue: Queue::new(),
                 inflight: HashMap::new(),
-                pending_ext: PendingHandler::new(vec![0, 1, 2, 3, 4, 5, 6, 7]),
-                pending_short: PendingHandler::new(vec![0, 1, 2, 3, 4, 5, 6, 7]),
+                pending_data_set: MRUAddressSet::new(8, 8),
             }
         });
         let service = service.map_err(|e| Error::RadioError(e));
@@ -249,99 +247,43 @@ impl Service {
         }
     }
 
-    fn set_pending_data_ext(&mut self, address: ExtendedAddress, pending_frames: bool) {
-        if pending_frames {
-            if let Some(write_slot) = self.pending_ext.promote(address) {
-                eprintln!(
-                    "Setting ExtAddr Pending slot {} to {:?}",
-                    write_slot, address
-                );
-                self.handle
-                    .spawn(
-                        self.radio
-                            .set_pending_data_ext(write_slot as usize, Some(address.as_u64()))
-                            .map(|res| {
-                                if let Err(e) = res {
-                                    eprintln!(
-                                        "Unable to set pending extended address slot {:?}",
-                                        e
-                                    );
-                                }
-                            }),
-                    )
+    fn handle_mru_address_set_action(&mut self, action: MRUAddressSetAction) {
+        match action {
+            MRUAddressSetAction::None => (),
+            MRUAddressSetAction::SetShortSlot(slot, address) => {
+                let address = address.map(|(panid, address)| (panid.as_u16(), address.as_u16()));
+                self.handle.spawn(
+                    self.radio.set_pending_data_short(slot, address)
+                    .map(|res| {
+                        if let Err(e) = res {
+                            eprintln!("Unable to set or clear short address slot {:?}", e);
+                        }
+                    })
+                )
                     .unwrap();
             }
-        } else {
-            if let Some(clear_slot) = self.pending_ext.clear(address) {
-                eprintln!("Clearing ExtAddr Pending slot {}", clear_slot);
-                self.handle
-                    .spawn(
-                        self.radio
-                            .set_pending_data_ext(clear_slot as usize, None)
-                            .map(|res| {
-                                if let Err(e) = res {
-                                    eprintln!(
-                                        "Unable to clear pending extended address slot {:?}",
-                                        e
-                                    );
-                                }
-                            }),
-                    )
-                    .unwrap();
-            }
-        }
-    }
-
-    fn set_pending_data_short(
-        &mut self,
-        pan_id: PANID,
-        address: ShortAddress,
-        pending_frames: bool,
-    ) {
-        if pending_frames {
-            if let Some(write_slot) = self.pending_short.promote((pan_id, address)) {
-                self.handle
-                    .spawn(
-                        self.radio
-                            .set_pending_data_short(
-                                write_slot as usize,
-                                Some((pan_id.as_u16(), address.as_u16())),
-                            )
-                            .map(|res| {
-                                if let Err(e) = res {
-                                    eprintln!("Unable to set pending short address slot {:?}", e);
-                                }
-                            }),
-                    )
-                    .unwrap();
-            }
-        } else {
-            if let Some(clear_slot) = self.pending_short.clear((pan_id, address)) {
-                self.handle
-                    .spawn(
-                        self.radio
-                            .set_pending_data_short(clear_slot as usize, None)
-                            .map(|res| {
-                                if let Err(e) = res {
-                                    eprintln!("Unable to clear pending short address slot {:?}", e);
-                                }
-                            }),
-                    )
+            MRUAddressSetAction::SetExtendedSlot(slot, address) => {
+                let address = address.map(|address| address.as_u64());
+                self.handle.spawn(
+                    self.radio.set_pending_data_ext(slot, address)
+                    .map(|res| {
+                        if let Err(e) = res {
+                            eprintln!("Unable to set or clear short address slot {:?}", e);
+                        }
+                    })
+                )
                     .unwrap();
             }
         }
     }
 
     fn set_pending_data(&mut self, address: &AddressSpecification, pending_frames: bool) {
-        match address {
-            AddressSpecification::None => (),
-            AddressSpecification::Short(panid, address) => {
-                self.set_pending_data_short(panid.clone(), address.clone(), pending_frames)
-            }
-            AddressSpecification::Extended(_, address) => {
-                self.set_pending_data_ext(address.clone(), pending_frames)
-            }
-        }
+        let action = 
+        match pending_frames {
+            false => self.pending_data_set.remove(address),
+            true => self.pending_data_set.insert(address),
+        };
+        self.handle_mru_address_set_action(action);
     }
 
     fn send_frame_queued(&mut self, frame: Frame) -> impl Future<Output = Result<(), Error>> {
@@ -399,11 +341,17 @@ impl Stream for Service {
 
         // Poll the queue
         while let Poll::Ready(outgoing) = Pin::new(&mut uself.queue).poll_next(cx) {
-            if let Some((destination, frame)) = outgoing {
-                let fut = Box::new(uself.send_frame_noqueue(frame));
-                uself.inflight.insert(destination, fut);
-            } else {
-                eprintln!("Queue stream finished :(");
+            match outgoing {
+                Some(QueueEvent::OutgoingFrame(destination, frame)) => {
+                    let fut = Box::new(uself.send_frame_noqueue(frame));
+                    uself.inflight.insert(destination, fut);
+                }
+                Some(QueueEvent::QueueFlushed(destination)) => {
+                    // TODO!
+                }
+                None => {
+                    eprintln!("Queue stream finished :(");
+                }
             }
         }
 

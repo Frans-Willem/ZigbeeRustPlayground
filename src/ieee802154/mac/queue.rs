@@ -5,7 +5,7 @@ use crate::saved_waker::SavedWaker;
 use futures::future::Future;
 use futures::stream::Stream;
 use futures::task::{Context, Poll};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use device_queue::DeviceQueueItem as QueueItem;
 
 pub struct Queue {
     queues: HashMap<AddressSpecification, DeviceQueue>,
-    flushed: HashSet<AddressSpecification>,
+    flushed: VecDeque<AddressSpecification>,
     timers: DelayQueue<AddressSpecification>,
     running_timers: HashMap<AddressSpecification, DelayQueueKey>,
     outgoing: VecDeque<(AddressSpecification, Frame)>,
@@ -28,7 +28,7 @@ impl Queue {
     pub fn new() -> Queue {
         Queue {
             queues: HashMap::new(),
-            flushed: HashSet::new(),
+            flushed: VecDeque::new(),
             timers: DelayQueue::new(),
             running_timers: HashMap::new(),
             outgoing: VecDeque::new(),
@@ -67,9 +67,8 @@ impl Queue {
     {
         let (new_state, action) = fun(self.queues.remove(&destination).unwrap_or_default());
         if new_state.is_idle() {
-            self.flushed.insert(destination.clone());
+            self.flushed.push_back(destination.clone());
         } else {
-            self.flushed.remove(&destination);
             self.queues.insert(destination.clone(), new_state);
         }
         if let Some(action) = action {
@@ -135,8 +134,13 @@ impl Queue {
     }
 }
 
+pub enum QueueEvent {
+    OutgoingFrame(AddressSpecification, Frame),
+    QueueFlushed(AddressSpecification),
+}
+
 impl Stream for Queue {
-    type Item = (AddressSpecification, Frame);
+    type Item = QueueEvent;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let uself = self.get_mut();
@@ -151,10 +155,16 @@ impl Stream for Queue {
         }
 
         // Outgoing frames!
-        if let Some(outgoing) = uself.outgoing.pop_front() {
-            Poll::Ready(Some(outgoing))
-        } else {
-            Poll::Pending
+        if let Some((destination, frame)) = uself.outgoing.pop_front() {
+            return Poll::Ready(Some(QueueEvent::OutgoingFrame(destination, frame)));
         }
+
+        // Flushed queues
+        while let Some(flushed) = uself.flushed.pop_front() {
+            if !uself.queues.contains_key(&flushed) {
+                return Poll::Ready(Some(QueueEvent::QueueFlushed(flushed)));
+            }
+        }
+        Poll::Pending
     }
 }

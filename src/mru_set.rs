@@ -182,6 +182,10 @@ where
             MRUSetAction::None
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[test]
