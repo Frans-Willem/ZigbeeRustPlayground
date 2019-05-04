@@ -19,6 +19,7 @@ mod delayqueue;
 mod ieee802154;
 mod radio_bridge;
 mod saved_waker;
+mod zigbee;
 
 use futures::compat::*;
 
