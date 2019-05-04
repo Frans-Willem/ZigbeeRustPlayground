@@ -347,7 +347,7 @@ impl Stream for Service {
                     uself.inflight.insert(destination, fut);
                 }
                 Some(QueueEvent::QueueFlushed(destination)) => {
-                    // TODO!
+                    uself.set_pending_data(&destination, false);
                 }
                 None => {
                     eprintln!("Queue stream finished :(");
