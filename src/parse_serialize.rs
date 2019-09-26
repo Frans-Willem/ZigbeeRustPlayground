@@ -1,4 +1,5 @@
 use bytes::{Buf, BufMut, Bytes};
+use enum_tryfrom::InvalidEnumValue;
 
 #[derive(Debug)]
 pub enum Error {
@@ -7,6 +8,12 @@ pub enum Error {
     Unimplemented(&'static str),
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<enum_tryfrom::InvalidEnumValue> for Error {
+    fn from(value: enum_tryfrom::InvalidEnumValue) -> Self {
+        Error::Unimplemented("Invalid enum value")
+    }
+}
 
 pub trait ParseFromBuf: Sized {
     fn parse_from_buf(buf: &mut Buf) -> Result<Self>;
@@ -17,6 +24,21 @@ pub trait SerializeToBuf {
         return 0;
     }
     fn serialize_to_buf(&self, buf: &mut BufMut) -> Result<()>;
+}
+
+pub trait SerializeToBufEx {
+    fn serialize_as_vec(&self) -> Result<Vec<u8>>;
+}
+
+impl<T> SerializeToBufEx for T
+where
+    T: SerializeToBuf,
+{
+    fn serialize_as_vec(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        self.serialize_to_buf(&mut buf)?;
+        Ok(buf)
+    }
 }
 
 impl SerializeToBuf for Bytes {

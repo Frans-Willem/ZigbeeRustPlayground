@@ -1,11 +1,14 @@
 use crate::ieee802154::{ExtendedAddress, ShortAddress};
-use crate::parse_serialize::{
-    SerializeToBuf, SerializeToBufTagged,
-};
 use crate::parse_serialize::Error as ParseError;
 use crate::parse_serialize::Result as ParseResult;
+#[cfg(test)]
+use crate::parse_serialize::SerializeToBufEx;
+use crate::parse_serialize::{
+    ParseFromBuf, ParseFromBufTagged, SerializeToBuf, SerializeToBufTagged,
+};
 use bitfield::bitfield;
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes};
+use std::convert::{TryFrom, TryInto};
 
 pub enum Command {}
 
@@ -15,8 +18,8 @@ pub enum FrameType {
     InterPAN(Bytes),
 }
 
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, TryFromPrimitive)]
+#[TryFromPrimitiveType = "u16"]
 pub enum DiscoverRoute {
     SupressRouteDiscovery = 0,
     EnableRouteDiscovery = 1,
@@ -91,6 +94,27 @@ impl SerializeToBuf for Frame {
         self.frame_type.serialize_to_buf(buf)
     }
 }
+impl ParseFromBuf for Frame {
+    fn parse_from_buf(buf: &mut Buf) -> Result<Self, ParseError> {
+        let fsf = FrameControl::parse_from_buf(buf)?;
+        let protocol_version = fsf.protocol_version();
+        let discover_route: DiscoverRoute = fsf.discover_route().try_into()?;
+        if fsf.multicast_flag() != 0 {
+            return Err(ParseError::Unimplemented("Multicast not yet supported"));
+        }
+        if fsf.security() != 0 {
+            return Err(ParseError::Unimplemented("Security not yet supported"));
+        }
+        if fsf.reserved() != 0 {
+            return Err(ParseError::Unimplemented("Reserved was not 0"));
+        }
+        let destination = ShortAddress::parse_from_buf(buf)?;
+        let source = ShortAddress::parse_from_buf(buf)?;
+        let radius = u8::parse_from_buf(buf)?;
+        let sequence_number = u8::parse_from_buf(buf)?;
+        unimplemented!()
+    }
+}
 
 impl SerializeToBuf for FrameType {
     fn serialize_to_buf(&self, buf: &mut BufMut) -> Result<(), ParseError> {
@@ -123,4 +147,36 @@ impl SerializeToBuf for SourceRoute {
         }
         Ok(())
     }
+}
+
+#[test]
+fn test_zigbee_nwk_frame() {
+    // Transport key transmission
+    let frame = Frame {
+        frame_type: FrameType::Data(
+            vec![
+                0x21, 0x05, 0x10, 0x00, 0x00, 0x00, 0x00, 0xd8, 0x5b, 0x3a, 0x13, 0x09, 0xff, 0x1b,
+                0x1b, 0x97, 0x71, 0xa2, 0xaa, 0xda, 0x9f, 0x3b, 0x2b, 0x25, 0x14, 0x35, 0x32, 0x29,
+                0x94, 0xd3, 0xf3, 0xd1, 0xa2, 0x98, 0xda, 0x93, 0x66, 0x9c, 0x8d, 0xff, 0x67, 0x73,
+                0xef, 0x5f, 0x94, 0xc5,
+            ]
+            .into(),
+        ),
+        protocol_version: 2,
+        destination: ShortAddress(0x558b),
+        source: ShortAddress(0),
+        radius: 30,
+        sequence_number: 26,
+        discover_route: DiscoverRoute::EnableRouteDiscovery,
+        destination_ext: None,
+        source_ext: None,
+        source_route: None,
+    };
+    let serialized = vec![
+        0x48, 0x00, 0x8b, 0x55, 0x00, 0x00, 0x1e, 0x1a, 0x21, 0x05, 0x10, 0x00, 0x00, 0x00, 0x00,
+        0xd8, 0x5b, 0x3a, 0x13, 0x09, 0xff, 0x1b, 0x1b, 0x97, 0x71, 0xa2, 0xaa, 0xda, 0x9f, 0x3b,
+        0x2b, 0x25, 0x14, 0x35, 0x32, 0x29, 0x94, 0xd3, 0xf3, 0xd1, 0xa2, 0x98, 0xda, 0x93, 0x66,
+        0x9c, 0x8d, 0xff, 0x67, 0x73, 0xef, 0x5f, 0x94, 0xc5,
+    ];
+    assert_eq!(frame.serialize_as_vec().unwrap(), serialized);
 }
