@@ -64,7 +64,7 @@ impl MRUAddressSet {
             AddressSpecification::Extended(_, address) => self.extended.insert(address).into(),
         }
     }
- 
+
     pub fn remove(&mut self, address: &AddressSpecification) -> MRUAddressSetAction {
         match address {
             AddressSpecification::None => MRUAddressSetAction::None,

@@ -252,34 +252,29 @@ impl Service {
             MRUAddressSetAction::None => (),
             MRUAddressSetAction::SetShortSlot(slot, address) => {
                 let address = address.map(|(panid, address)| (panid.as_u16(), address.as_u16()));
-                self.handle.spawn(
-                    self.radio.set_pending_data_short(slot, address)
-                    .map(|res| {
+                self.handle
+                    .spawn(self.radio.set_pending_data_short(slot, address).map(|res| {
                         if let Err(e) = res {
                             eprintln!("Unable to set or clear short address slot {:?}", e);
                         }
-                    })
-                )
+                    }))
                     .unwrap();
             }
             MRUAddressSetAction::SetExtendedSlot(slot, address) => {
                 let address = address.map(|address| address.as_u64());
-                self.handle.spawn(
-                    self.radio.set_pending_data_ext(slot, address)
-                    .map(|res| {
+                self.handle
+                    .spawn(self.radio.set_pending_data_ext(slot, address).map(|res| {
                         if let Err(e) = res {
                             eprintln!("Unable to set or clear short address slot {:?}", e);
                         }
-                    })
-                )
+                    }))
                     .unwrap();
             }
         }
     }
 
     fn set_pending_data(&mut self, address: &AddressSpecification, pending_frames: bool) {
-        let action = 
-        match pending_frames {
+        let action = match pending_frames {
             false => self.pending_data_set.remove(address),
             true => self.pending_data_set.insert(address),
         };
