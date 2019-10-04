@@ -9,7 +9,20 @@ extern crate enum_tryfrom_derive;
 extern crate enum_tryfrom;
 #[macro_use]
 extern crate futures;
+extern crate aes;
 extern crate bimap;
+extern crate block_cipher_trait;
+extern crate block_modes;
+extern crate block_padding;
+extern crate crypto_mac;
+#[macro_use]
+extern crate generic_array;
+extern crate aead;
+extern crate ctr;
+extern crate digest;
+extern crate hmac;
+extern crate stream_cipher;
+extern crate subtle;
 
 mod mru_set;
 #[macro_use]
