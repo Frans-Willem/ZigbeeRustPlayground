@@ -1,5 +1,4 @@
 use bytes::{Buf, BufMut, Bytes};
-use enum_tryfrom::InvalidEnumValue;
 
 #[derive(Debug)]
 pub enum Error {
@@ -53,13 +52,15 @@ impl SerializeToBuf for Bytes {
 
 /* Default implementations */
 macro_rules! default_impl {
-    ($t:ty, $get:ident, $put:ident) => {
+    ($t:ty) => {
         impl ParseFromBuf for $t {
             fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
-                if buf.remaining() < std::mem::size_of::<$t>() {
+                let mut data = [0; std::mem::size_of::<$t>()];
+                if buf.remaining() < data.len() {
                     std::result::Result::Err($crate::parse_serialize::Error::InsufficientData)
                 } else {
-                    std::result::Result::Ok(buf.$get())
+                    buf.copy_to_slice(&mut data);
+                    std::result::Result::Ok(<$t>::from_le_bytes(data))
                 }
             }
         }
@@ -68,21 +69,23 @@ macro_rules! default_impl {
                 return std::mem::size_of::<$t>();
             }
             fn serialize_to_buf(&self, buf: &mut BufMut) -> $crate::parse_serialize::Result<()> {
-                buf.$put(self.clone());
+                buf.put_slice(&self.clone().to_le_bytes());
                 std::result::Result::Ok(())
             }
         }
     };
 }
 
-default_impl!(u8, get_u8, put_u8);
-default_impl!(u16, get_u16_le, put_u16_le);
-default_impl!(u32, get_u32_le, put_u32_le);
-default_impl!(u64, get_u64_le, put_u64_le);
-default_impl!(i8, get_i8, put_i8);
-default_impl!(i16, get_i16_le, put_i16_le);
-default_impl!(i32, get_i32_le, put_i32_le);
-default_impl!(i64, get_i64_le, put_i64_le);
+default_impl!(u8);
+default_impl!(u16);
+default_impl!(u32);
+default_impl!(u64);
+default_impl!(u128);
+default_impl!(i8);
+default_impl!(i16);
+default_impl!(i32);
+default_impl!(i64);
+default_impl!(i128);
 
 #[macro_export]
 macro_rules! default_parse_serialize_newtype {
