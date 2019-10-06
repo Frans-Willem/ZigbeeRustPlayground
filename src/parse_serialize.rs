@@ -9,7 +9,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<enum_tryfrom::InvalidEnumValue> for Error {
-    fn from(value: enum_tryfrom::InvalidEnumValue) -> Self {
+    fn from(_: enum_tryfrom::InvalidEnumValue) -> Self {
         Error::Unimplemented("Invalid enum value")
     }
 }
@@ -37,6 +37,20 @@ where
         let mut buf = Vec::new();
         self.serialize_to_buf(&mut buf)?;
         Ok(buf)
+    }
+}
+
+pub trait ParseFromBufEx: Sized {
+    fn parse_from_vec(data: &Vec<u8>) -> Result<Self>;
+}
+
+impl<T> ParseFromBufEx for T
+where
+    T: ParseFromBuf,
+{
+    fn parse_from_vec(data: &Vec<u8>) -> Result<T> {
+        let mut cursor = std::io::Cursor::new(data);
+        T::parse_from_buf(&mut cursor)
     }
 }
 
