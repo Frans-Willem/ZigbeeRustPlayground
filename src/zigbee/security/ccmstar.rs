@@ -37,7 +37,18 @@ pub enum CcmStarIntegrityCodeLen {
     MIC10 = 4,
     MIC12 = 5,
     MIC14 = 6,
-    MIC15 = 7,
+    MIC16 = 7,
+}
+
+impl CcmStarIntegrityCodeLen {
+    pub fn tag_size(&self) -> usize {
+        let as_num = *self as usize;
+        if as_num == 0 {
+            0
+        } else {
+            (as_num * 2) + 2
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -140,12 +151,8 @@ where
         Ctr128::from_cipher(self.cipher.clone(), &counter_nonce)
     }
 
-    fn get_tag_len(&self) -> usize {
-        if self.integrity_code_len as usize == 0 {
-            0
-        } else {
-            ((self.integrity_code_len as usize) * 2 + 2)
-        }
+    pub fn get_tag_len(&self) -> usize {
+        self.integrity_code_len.tag_size()
     }
 }
 
