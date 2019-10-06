@@ -6,7 +6,7 @@ use crate::ieee802154::ExtendedAddress;
 use crate::parse_serialize;
 use crate::parse_serialize::{
     ParseFromBuf, ParseFromBufEx, ParseFromBufTagged, Result as ParseResult, SerializeToBuf,
-    SerializeToBufTagged,
+    SerializeToBufEx, SerializeToBufTagged,
 };
 use aead::Aead;
 use bitfield::bitfield;
@@ -162,67 +162,96 @@ impl ParseFromBuf for SecuredData {
     }
 }
 
-impl SecuredData {
-    fn generate_encryption_key(&self, store: &KeyStore) -> Option<[u8; 16]> {
-        match self.key_identifier {
-            KeyIdentifier::Data => store.data,
-            KeyIdentifier::Network(_) => {
-                // Not implemented yet
-                unimplemented!()
-            }
-            KeyIdentifier::KeyTransport => {
-                let mut mac: hmac::Hmac<mmohash::MMOHash<aes::Aes128, _>> =
-                    hmac::Hmac::new(&store.key_transport?.into());
-                mac.input(&[0; 1]);
-                Some(mac.result().code().into())
-            }
-            KeyIdentifier::KeyLoad => {
-                let mut mac: hmac::Hmac<mmohash::MMOHash<aes::Aes128, _>> =
-                    hmac::Hmac::new(&store.key_transport?.into());
-                mac.input(&[2; 1]);
-                Some(mac.result().code().into())
-            }
+fn generate_encryption_key(key_identifier: KeyIdentifier, store: &KeyStore) -> Option<[u8; 16]> {
+    match key_identifier {
+        KeyIdentifier::Data => store.data,
+        KeyIdentifier::Network(_) => {
+            // Not implemented yet
+            unimplemented!()
+        }
+        KeyIdentifier::KeyTransport => {
+            let mut mac: hmac::Hmac<mmohash::MMOHash<aes::Aes128, _>> =
+                hmac::Hmac::new(&store.key_transport?.into());
+            mac.input(&[0; 1]);
+            Some(mac.result().code().into())
+        }
+        KeyIdentifier::KeyLoad => {
+            let mut mac: hmac::Hmac<mmohash::MMOHash<aes::Aes128, _>> =
+                hmac::Hmac::new(&store.key_transport?.into());
+            mac.input(&[2; 1]);
+            Some(mac.result().code().into())
         }
     }
+}
+
+fn generate_nonce(
+    key_identifier: KeyIdentifier,
+    frame_counter: u32,
+    extended_nonce: bool,
+    security_level: SecurityLevel,
+    source_address: ExtendedAddress,
+) -> Option<[u8; 15]> {
+    let mut nonce = std::io::Cursor::new([0; 15]);
+    source_address.serialize_to_buf(&mut nonce).ok()?;
+    nonce.put_u32_le(frame_counter);
+    let mut sc = SecurityControl(0);
+    sc.set_security_level(security_level.into());
+    sc.set_key_identifier(key_identifier.get_serialize_tag().ok()?);
+    sc.set_extended_nonce(extended_nonce as u8);
+    sc.set_reserved(0);
+    nonce.put_u8(sc.0);
+    Some(nonce.into_inner())
+}
+
+fn generate_associated_data(
+    key_identifier: KeyIdentifier,
+    frame_counter: u32,
+    extended_source: Option<ExtendedAddress>,
+    security_level: SecurityLevel,
+    buf: &mut BufMut,
+) -> ParseResult<()> {
+    // This function is slightly different from the serialize_to_buf,
+    // as in this case the security level *is* serialized.
+    let mut sc = SecurityControl(0);
+    sc.set_security_level(security_level.into());
+    sc.set_key_identifier(key_identifier.get_serialize_tag()?);
+    sc.set_extended_nonce(extended_source.is_some() as u8);
+    sc.set_reserved(0);
+    sc.serialize_to_buf(buf)?;
+    frame_counter.serialize_to_buf(buf)?;
+    if let Some(source) = extended_source {
+        source.serialize_to_buf(buf)?;
+    }
+    key_identifier.serialize_to_buf(buf)?;
+    Ok(())
+}
+
+impl SecuredData {
     fn generate_nonce(
         &self,
         security_level: SecurityLevel,
         source_address: ExtendedAddress,
     ) -> Option<[u8; 15]> {
-        let mut nonce = std::io::Cursor::new([0; 15]);
-        if let Some(own_address) = self.extended_source {
-            own_address.serialize_to_buf(&mut nonce).ok()?;
-        } else {
-            source_address.serialize_to_buf(&mut nonce).ok()?;
-        }
-        nonce.put_u32_le(self.frame_counter);
-        let mut sc = SecurityControl(0);
-        sc.set_security_level(security_level.into());
-        sc.set_key_identifier(self.key_identifier.get_serialize_tag().ok()?);
-        sc.set_extended_nonce(self.extended_source.is_some() as u8);
-        sc.set_reserved(0);
-        nonce.put_u8(sc.0);
-        Some(nonce.into_inner())
+        generate_nonce(
+            self.key_identifier,
+            self.frame_counter,
+            self.extended_source.is_some(),
+            security_level,
+            self.extended_source.unwrap_or(source_address),
+        )
     }
     fn generate_associated_data(
         &self,
         security_level: SecurityLevel,
         buf: &mut BufMut,
     ) -> ParseResult<()> {
-        // This function is slightly different from the serialize_to_buf,
-        // as in this case the security level *is* serialized.
-        let mut sc = SecurityControl(0);
-        sc.set_security_level(security_level.into());
-        sc.set_key_identifier(self.key_identifier.get_serialize_tag()?);
-        sc.set_extended_nonce(self.extended_source.is_some() as u8);
-        sc.set_reserved(0);
-        sc.serialize_to_buf(buf)?;
-        self.frame_counter.serialize_to_buf(buf)?;
-        if let Some(source) = self.extended_source {
-            source.serialize_to_buf(buf)?;
-        }
-        self.key_identifier.serialize_to_buf(buf)?;
-        Ok(())
+        generate_associated_data(
+            self.key_identifier,
+            self.frame_counter,
+            self.extended_source,
+            security_level,
+            buf,
+        )
     }
     pub fn decrypt(
         &self,
@@ -231,7 +260,7 @@ impl SecuredData {
         source_address: ExtendedAddress,
         store: &KeyStore,
     ) -> Option<Vec<u8>> {
-        let key = self.generate_encryption_key(store)?;
+        let key = generate_encryption_key(self.key_identifier, store)?;
         let nonce = self.generate_nonce(security_level, source_address)?;
         let ccmstar = ccmstar::CcmStar::from_cipher(
             aes::Aes128::new(&key.into()),
@@ -272,6 +301,80 @@ impl SecuredData {
             Some(message.as_ref().into())
         }
     }
+
+    // TODO: Option<> should be changed to a Result<>
+    pub fn encrypt(
+        plaintext: Vec<u8>,
+        mut associated_data: Vec<u8>,
+        security_level: SecurityLevel,
+        key_identifier: KeyIdentifier,
+        frame_counter: u32,
+        extended_source: bool,
+        source_address: ExtendedAddress,
+        store: &KeyStore,
+    ) -> Option<SecuredData> {
+        let key = generate_encryption_key(key_identifier, store)?;
+        let nonce = generate_nonce(
+            key_identifier,
+            frame_counter,
+            extended_source,
+            security_level,
+            source_address,
+        )?;
+        let ccmstar = ccmstar::CcmStar::from_cipher(
+            aes::Aes128::new(&key.into()),
+            security_level.mig_len.into(),
+            ccmstar::CcmStarLengthSize::Len16,
+        );
+        generate_associated_data(
+            key_identifier,
+            frame_counter,
+            if extended_source {
+                Some(source_address)
+            } else {
+                None
+            },
+            security_level,
+            &mut associated_data,
+        )
+        .ok()?;
+        let payload = if security_level.encryption {
+            ccmstar
+                .encrypt(
+                    &nonce.into(),
+                    aead::Payload {
+                        msg: &plaintext,
+                        aad: &associated_data,
+                    },
+                )
+                .ok()?
+        } else {
+            associated_data.put(&plaintext);
+            let empty: [u8; 0] = [];
+            let tag = ccmstar
+                .encrypt(
+                    &nonce.into(),
+                    aead::Payload {
+                        msg: &empty,
+                        aad: &associated_data,
+                    },
+                )
+                .ok()?;
+            let mut payload = plaintext.clone();
+            payload.put(&tag);
+            payload
+        };
+        Some(SecuredData {
+            key_identifier,
+            frame_counter,
+            extended_source: if extended_source {
+                Some(source_address)
+            } else {
+                None
+            },
+            payload: payload.into(),
+        })
+    }
 }
 
 #[test]
@@ -298,16 +401,26 @@ fn test_decode_transport_key() {
         0x00, 0x00, 0x00, 0x00, 0x06, 0x63, 0x1c, 0xfe, 0xff, 0x5e, 0xcf, 0xd0, 0x15, 0x68, 0x89,
         0x0e, 0x00, 0x4b, 0x12, 0x00,
     ];
+    let security_level = SecurityLevel {
+        encryption: true,
+        mig_len: MessageIntegrityCodeLen::MIC32,
+    };
     let decrypted = parsed
-        .decrypt(
-            header,
-            SecurityLevel {
-                encryption: true,
-                mig_len: MessageIntegrityCodeLen::MIC32,
-            },
-            source_address,
-            &keystore,
-        )
+        .decrypt(header.clone(), security_level, source_address, &keystore)
         .unwrap();
     assert_eq!(decrypted, expected_plaintext);
+
+    let recrypted = SecuredData::encrypt(
+        decrypted,
+        header.clone(),
+        security_level,
+        KeyIdentifier::KeyTransport,
+        1,
+        false,
+        source_address,
+        &keystore,
+    )
+    .unwrap();
+    let recrypted = recrypted.serialize_as_vec().unwrap();
+    assert_eq!(recrypted, secured_frame);
 }
