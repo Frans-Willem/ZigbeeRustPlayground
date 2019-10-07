@@ -123,7 +123,7 @@ pub struct RadioBridgeService {
 
 impl RadioBridgeService {
     pub fn new(
-        serial_output: Box<Sink<serial_protocol::Command, SinkError = io::Error> + Unpin + Send>,
+        serial_output: Box<Sink<serial_protocol::Command, Error = io::Error> + Unpin + Send>,
         serial_input: Box<
             Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
         >,
@@ -147,20 +147,27 @@ impl RadioBridgeService {
         */
         handle
             .spawn(async move {
-                await!(serial_output.send_all(&mut outgoing_command_stream)).unwrap();
+                serial_output
+                    .send_all(&mut outgoing_command_stream)
+                    .await
+                    .unwrap();
             })
             .unwrap();
         let dispatcher = Arc::new(RwLock::new(Dispatcher::new()));
         let dispatcher_clone = dispatcher.clone();
         handle
             .spawn(async move {
-                await!(serial_input.for_each(move |res| {
-                    match res {
-                        Ok(cmd) => handle_incoming_command(cmd, &dispatcher_clone, &packet_output),
-                        Err(e) => eprintln!("Serial input error: {:?}", e),
-                    }
-                    futures::future::ready(())
-                }));
+                serial_input
+                    .for_each(move |res| {
+                        match res {
+                            Ok(cmd) => {
+                                handle_incoming_command(cmd, &dispatcher_clone, &packet_output)
+                            }
+                            Err(e) => eprintln!("Serial input error: {:?}", e),
+                        }
+                        futures::future::ready(())
+                    })
+                    .await;
             })
             .unwrap();
         (

@@ -1,4 +1,3 @@
-#![feature(async_await, await_macro, trait_alias)]
 #![allow(dead_code)]
 extern crate bitfield;
 extern crate bytes;
@@ -60,7 +59,7 @@ impl<T: futures::task::Spawn + Clone + Send + Sync + 'static> CloneSpawn for T {
 async fn main_loop(handle: Box<CloneSpawn>, service: MACService) -> () {
     let mut handle = handle;
     let mut service = service;
-    while let Some(event) = await!(service.next()) {
+    while let Some(event) = service.next().await {
         on_mac_event(&mut handle, &mut service, event);
     }
 }

@@ -181,7 +181,7 @@ macro_rules! default_param_get_set{
 
 impl RadioBridgeService {
     pub fn new(
-        serial_output: Box<Sink<serial_protocol::Command, SinkError = io::Error> + Unpin + Send>,
+        serial_output: Box<Sink<serial_protocol::Command, Error = io::Error> + Unpin + Send>,
         serial_input: Box<
             Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
         >,
