@@ -15,7 +15,43 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::result::Result;
 
-#[derive(Clone, Copy)]
+#[derive(Eq, PartialEq, Debug)]
+pub enum MaybeSecured<T> {
+    Secured(SecuredData),
+    Unsecured(T),
+}
+
+impl<T: Serialize> Serialize for MaybeSecured<T> {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        match self {
+            MaybeSecured::Secured(data) => data.serialize_to(target),
+            MaybeSecured::Unsecured(data) => data.serialize_to(target),
+        }
+    }
+}
+impl<T: Serialize> SerializeTagged for MaybeSecured<T> {
+    type TagType = bool;
+
+    fn serialize_tag(&self) -> SerializeResult<bool> {
+        match self {
+            MaybeSecured::Secured(_) => Ok(true),
+            MaybeSecured::Unsecured(_) => Ok(false),
+        }
+    }
+}
+
+impl<T: Deserialize> DeserializeTagged for MaybeSecured<T> {
+    type TagType = bool;
+
+    fn deserialize(tag: bool, input: &[u8]) -> DeserializeResult<MaybeSecured<T>> {
+        match tag {
+            true => nom::combinator::map(SecuredData::deserialize, MaybeSecured::Secured)(input),
+            false => nom::combinator::map(T::deserialize, MaybeSecured::Unsecured)(input),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum KeyIdentifier {
     Data,
     Network(u8), // = 1
@@ -75,7 +111,8 @@ impl Serialize for KeyIdentifier {
     }
 }
 
-impl SerializeTagged<u8> for KeyIdentifier {
+impl SerializeTagged for KeyIdentifier {
+    type TagType = u8;
     fn serialize_tag(&self) -> SerializeResult<u8> {
         Ok(match self {
             KeyIdentifier::Data => 0,
@@ -86,7 +123,8 @@ impl SerializeTagged<u8> for KeyIdentifier {
     }
 }
 
-impl DeserializeTagged<u8> for KeyIdentifier {
+impl DeserializeTagged for KeyIdentifier {
+    type TagType = u8;
     fn deserialize(tag: u8, input: &[u8]) -> DeserializeResult<Self> {
         match tag {
             0 => Ok((input, KeyIdentifier::Data)),
@@ -98,11 +136,12 @@ impl DeserializeTagged<u8> for KeyIdentifier {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct SecuredData {
-    key_identifier: KeyIdentifier,
-    frame_counter: u32,
-    extended_source: Option<ExtendedAddress>,
-    payload: Vec<u8>,
+    pub key_identifier: KeyIdentifier,
+    pub frame_counter: u32,
+    pub extended_source: Option<ExtendedAddress>,
+    pub payload: Vec<u8>,
 }
 
 bitfield! {

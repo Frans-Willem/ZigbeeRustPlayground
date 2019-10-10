@@ -75,8 +75,9 @@ pub trait Deserialize: Sized {
     }
 }
 
-pub trait DeserializeTagged<T>: Sized {
-    fn deserialize(tag: T, input: &[u8]) -> DeserializeResult<Self>;
+pub trait DeserializeTagged: Sized {
+    type TagType;
+    fn deserialize(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
 }
 
 pub type SerializeResult<T> = std::result::Result<T, SerializeError>;
@@ -90,8 +91,9 @@ pub trait Serialize: Sized {
     }
 }
 
-pub trait SerializeTagged<T: Sized>: Serialize {
-    fn serialize_tag(&self) -> SerializeResult<T>;
+pub trait SerializeTagged: Serialize {
+    type TagType;
+    fn serialize_tag(&self) -> SerializeResult<Self::TagType>;
 }
 
 /* Default implementations */

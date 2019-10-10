@@ -373,7 +373,8 @@ impl Serialize for Command {
     }
 }
 
-impl DeserializeTagged<u16> for FrameType {
+impl DeserializeTagged for FrameType {
+    type TagType = u16;
     fn deserialize(frame_type: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match frame_type {
             0 => {
@@ -411,7 +412,8 @@ impl DeserializeTagged<u16> for FrameType {
     }
 }
 
-impl SerializeTagged<u16> for FrameType {
+impl SerializeTagged for FrameType {
+    type TagType = u16;
     fn serialize_tag(&self) -> SerializeResult<u16> {
         match self {
             FrameType::Beacon { .. } => Ok(0),
