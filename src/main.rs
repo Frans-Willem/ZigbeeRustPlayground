@@ -20,6 +20,7 @@ extern crate aead;
 extern crate ctr;
 extern crate digest;
 extern crate hmac;
+extern crate nom;
 extern crate stream_cipher;
 extern crate subtle;
 
@@ -44,19 +45,17 @@ use tokio::prelude::Future as _;
 use tokio::prelude::Stream as _;
 use tokio::runtime::Runtime;
 
-use bytes::Bytes;
-
 pub trait CloneSpawn: Spawn + Send + Sync {
-    fn clone(&self) -> Box<CloneSpawn>;
+    fn clone(&self) -> Box<dyn CloneSpawn>;
 }
 
 impl<T: futures::task::Spawn + Clone + Send + Sync + 'static> CloneSpawn for T {
-    fn clone(&self) -> Box<CloneSpawn> {
+    fn clone(&self) -> Box<dyn CloneSpawn> {
         Box::new(self.clone())
     }
 }
 
-async fn main_loop(handle: Box<CloneSpawn>, service: MACService) -> () {
+async fn main_loop(handle: Box<dyn CloneSpawn>, service: MACService) -> () {
     let mut handle = handle;
     let mut service = service;
     while let Some(event) = service.next().await {
@@ -64,12 +63,11 @@ async fn main_loop(handle: Box<CloneSpawn>, service: MACService) -> () {
     }
 }
 
-fn on_mac_event(handle: &mut Box<CloneSpawn>, service: &mut MACService, event: MACEvent) {
+fn on_mac_event(handle: &mut Box<dyn CloneSpawn>, service: &mut MACService, event: MACEvent) {
     eprintln!("MAC event: {:?}", event);
     match event {
         MACEvent::BeaconRequest() => {
-            let payload =
-                Bytes::from(&b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00"[..]);
+            let payload = b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00".to_vec();
             println!("Sending beacon!");
             handle
                 .spawn(service.send_beacon(payload).map(|res| {
@@ -118,7 +116,7 @@ impl Clone for MySpawner {
 
 fn main() {
     let rt = Runtime::new().unwrap();
-    let mut spawner: Box<CloneSpawn> = Box::new(MySpawner(rt.executor()));
+    let mut spawner: Box<dyn CloneSpawn> = Box::new(MySpawner(rt.executor()));
     let settings = tokio_serial::SerialPortSettings::default();
     let port = tokio_serial::Serial::from_path("/dev/ttyACM0", &settings).unwrap();
     let (output_sink, output_stream) = radio_bridge::serial_protocol::Codec::new()

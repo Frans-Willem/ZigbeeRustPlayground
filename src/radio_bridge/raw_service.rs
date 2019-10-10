@@ -123,11 +123,11 @@ pub struct RadioBridgeService {
 
 impl RadioBridgeService {
     pub fn new(
-        serial_output: Box<Sink<serial_protocol::Command, Error = io::Error> + Unpin + Send>,
+        serial_output: Box<dyn Sink<serial_protocol::Command, Error = io::Error> + Unpin + Send>,
         serial_input: Box<
-            Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
+            dyn Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
         >,
-        handle: &mut Spawn,
+        handle: &mut dyn Spawn,
     ) -> (RadioBridgeService, mpsc::UnboundedReceiver<IncomingPacket>) {
         let (command_sink, mut outgoing_command_stream) =
             mpsc::unbounded::<serial_protocol::Command>();

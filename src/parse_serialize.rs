@@ -1,89 +1,116 @@
-use bytes::{Buf, BufMut, Bytes};
+use nom::IResult;
 
 #[derive(Debug)]
-pub enum Error {
+pub enum SerializeError {
     InsufficientData,
     UnexpectedData,
     Unimplemented(&'static str),
+    DataLeft,
+    NomError(nom::error::ErrorKind),
 }
-pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<enum_tryfrom::InvalidEnumValue> for Error {
+impl From<enum_tryfrom::InvalidEnumValue> for SerializeError {
     fn from(_: enum_tryfrom::InvalidEnumValue) -> Self {
-        Error::Unimplemented("Invalid enum value")
+        SerializeError::Unimplemented("Invalid enum value")
     }
 }
 
-pub trait ParseFromBuf: Sized {
-    fn parse_from_buf(buf: &mut Buf) -> Result<Self>;
-}
+#[derive(Debug)]
+pub struct DeserializeError<I>(pub I, pub SerializeError);
+pub type DeserializeResult<'lt, T> = IResult<&'lt [u8], T, DeserializeError<&'lt [u8]>>;
 
-pub trait SerializeToBuf {
-    fn expected_size(&self) -> usize {
-        return 0;
+impl<I> nom::error::ParseError<I> for DeserializeError<I> {
+    fn from_error_kind(input: I, kind: nom::error::ErrorKind) -> Self {
+        DeserializeError(input, SerializeError::NomError(kind))
     }
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> Result<()>;
-}
 
-pub trait SerializeToBufEx {
-    fn serialize_as_vec(&self) -> Result<Vec<u8>>;
-}
-
-impl<T> SerializeToBufEx for T
-where
-    T: SerializeToBuf,
-{
-    fn serialize_as_vec(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.serialize_to_buf(&mut buf)?;
-        Ok(buf)
+    fn append(input: I, kind: nom::error::ErrorKind, _other: Self) -> Self {
+        Self::from_error_kind(input, kind)
     }
 }
 
-pub trait ParseFromBufEx: Sized {
-    fn parse_from_vec(data: &Vec<u8>) -> Result<Self>;
+impl<I> DeserializeError<I> {
+    pub fn new(input: I, error: SerializeError) -> Self {
+        DeserializeError(input, error)
+    }
+
+    pub fn insufficient_data(input: I) -> Self {
+        Self::new(input, SerializeError::InsufficientData)
+    }
+
+    pub fn unexpected_data(input: I) -> Self {
+        Self::new(input, SerializeError::UnexpectedData)
+    }
+
+    pub fn unimplemented(input: I, text: &'static str) -> Self {
+        Self::new(input, SerializeError::Unimplemented(text))
+    }
+
+    pub fn data_left(input: I) -> Self {
+        Self::new(input, SerializeError::DataLeft)
+    }
 }
 
-impl<T> ParseFromBufEx for T
-where
-    T: ParseFromBuf,
-{
-    fn parse_from_vec(data: &Vec<u8>) -> Result<T> {
-        let mut cursor = std::io::Cursor::new(data);
-        T::parse_from_buf(&mut cursor)
+impl<'lt, T> Into<DeserializeResult<'lt, T>> for DeserializeError<&'lt [u8]> {
+    fn into(self) -> DeserializeResult<'lt, T> {
+        Err(nom::Err::Error(self))
     }
 }
 
-impl SerializeToBuf for Bytes {
-    fn expected_size(&self) -> usize {
-        self.len()
+pub trait Deserialize: Sized {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Self>;
+    fn deserialize_complete(input: &[u8]) -> SerializeResult<Self> {
+        match Self::deserialize(input) {
+            Ok((remaining, result)) => {
+                if remaining.len() != 0 {
+                    Err(SerializeError::DataLeft)
+                } else {
+                    Ok(result)
+                }
+            }
+            Err(nom::Err::Incomplete(_)) => Err(SerializeError::InsufficientData),
+            Err(nom::Err::Error(e)) => Err(e.1),
+            Err(nom::Err::Failure(e)) => Err(e.1),
+        }
     }
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> Result<()> {
-        BufMut::put_slice(buf, self);
-        Ok(())
+}
+
+pub trait DeserializeTagged<T>: Sized {
+    fn deserialize(tag: T, input: &[u8]) -> DeserializeResult<Self>;
+}
+
+pub type SerializeResult<T> = std::result::Result<T, SerializeError>;
+
+pub trait Serialize: Sized {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()>;
+    fn serialize(&self) -> SerializeResult<Vec<u8>> {
+        let mut result = vec![];
+        self.serialize_to(&mut result)?;
+        Ok(result)
     }
+}
+
+pub trait SerializeTagged<T: Sized>: Serialize {
+    fn serialize_tag(&self) -> SerializeResult<T>;
 }
 
 /* Default implementations */
 macro_rules! default_impl {
     ($t:ty) => {
-        impl ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
+        impl $crate::parse_serialize::Deserialize for $t {
+            fn deserialize(input: &[u8]) -> $crate::parse_serialize::DeserializeResult<$t> {
                 let mut data = [0; std::mem::size_of::<$t>()];
-                if buf.remaining() < data.len() {
-                    std::result::Result::Err($crate::parse_serialize::Error::InsufficientData)
-                } else {
-                    buf.copy_to_slice(&mut data);
-                    std::result::Result::Ok(<$t>::from_le_bytes(data))
-                }
+                let (input, parsed) = nom::bytes::streaming::take(data.len())(input)?;
+                data.copy_from_slice(parsed);
+                std::result::Result::Ok((input, <$t>::from_le_bytes(data)))
             }
         }
-        impl SerializeToBuf for $t {
-            fn expected_size(&self) -> usize {
-                return std::mem::size_of::<$t>();
-            }
-            fn serialize_to_buf(&self, buf: &mut BufMut) -> $crate::parse_serialize::Result<()> {
-                buf.put_slice(&self.clone().to_le_bytes());
+        impl $crate::parse_serialize::Serialize for $t {
+            fn serialize_to(
+                &self,
+                target: &mut Vec<u8>,
+            ) -> $crate::parse_serialize::SerializeResult<()> {
+                target.extend(&self.clone().to_le_bytes());
                 std::result::Result::Ok(())
             }
         }
@@ -102,26 +129,21 @@ default_impl!(i64);
 default_impl!(i128);
 
 #[macro_export]
-macro_rules! default_parse_serialize_newtype {
+macro_rules! default_serialization_newtype {
     ($t:ident, $i:ident) => {
-        impl $crate::parse_serialize::ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
-                std::result::Result::Ok($t($i::parse_from_buf(buf)?))
+        impl $crate::parse_serialize::Deserialize for $t {
+            fn deserialize(input: &[u8]) -> $crate::parse_serialize::DeserializeResult<$t> {
+                let (input, parsed) = $i::deserialize(input)?;
+                std::result::Result::Ok((input, $t(parsed)))
             }
         }
-        impl $crate::parse_serialize::SerializeToBuf for $t {
-            fn expected_size(&self) -> usize {
-                match self {
-                    $t(inner) => inner.expected_size(),
-                }
-            }
-
-            fn serialize_to_buf(
+        impl $crate::parse_serialize::Serialize for $t {
+            fn serialize_to(
                 &self,
-                buf: &mut bytes::BufMut,
-            ) -> $crate::parse_serialize::Result<()> {
+                target: &mut Vec<u8>,
+            ) -> $crate::parse_serialize::SerializeResult<()> {
                 match self {
-                    $t(inner) => inner.serialize_to_buf(buf),
+                    $t(inner) => inner.serialize_to(target),
                 }
             }
         }
@@ -129,32 +151,96 @@ macro_rules! default_parse_serialize_newtype {
 }
 
 #[macro_export]
-macro_rules! default_parse_serialize_enum {
+macro_rules! default_serialization_enum {
     ($t:ident, $i:ident) => {
-        impl $crate::parse_serialize::ParseFromBuf for $t {
-            fn parse_from_buf(buf: &mut bytes::Buf) -> $crate::parse_serialize::Result<$t> {
-                $t::try_from($i::parse_from_buf(buf)?).map_err(|_| ParseError::UnexpectedData)
+        impl $crate::parse_serialize::Deserialize for $t {
+            fn deserialize(input: &[u8]) -> $crate::parse_serialize::DeserializeResult<$t> {
+                let (input, parsed) = $i::deserialize(input)?;
+                let result = $t::try_from(parsed).map_err(|_| {
+                    $crate::nom::Err::Error($crate::parse_serialize::DeserializeError(
+                        input,
+                        SerializeError::UnexpectedData,
+                    ))
+                })?;
+                std::result::Result::Ok((input, result))
             }
         }
-        impl $crate::parse_serialize::SerializeToBuf for $t {
-            fn expected_size(&self) -> usize {
-                // If you encounter errors here, be sure to derive Copy and Clone!
-                (*self as $i).expected_size()
-            }
-            fn serialize_to_buf(
+        impl $crate::parse_serialize::Serialize for $t {
+            fn serialize_to(
                 &self,
-                buf: &mut bytes::BufMut,
-            ) -> $crate::parse_serialize::Result<()> {
-                (*self as $i).serialize_to_buf(buf)
+                target: &mut Vec<u8>,
+            ) -> $crate::parse_serialize::SerializeResult<()> {
+                (*self as $i).serialize_to(target)
             }
         }
     };
 }
 
-pub trait ParseFromBufTagged<T>: Sized {
-    fn parse_from_buf(tag: T, buf: &mut Buf) -> Result<Self>;
+impl<T: Serialize> Serialize for &T {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        (*self).serialize_to(target)
+    }
 }
 
-pub trait SerializeToBufTagged<T>: SerializeToBuf {
-    fn get_serialize_tag(&self) -> Result<T>;
+// TODO: Macro-ify deze
+impl<T1: Deserialize, T2: Deserialize> Deserialize for (T1, T2) {
+    fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2)> {
+        nom::sequence::tuple((T1::deserialize, T2::deserialize))(input)
+    }
+}
+impl<T1: Deserialize, T2: Deserialize, T3: Deserialize> Deserialize for (T1, T2, T3) {
+    fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2, T3)> {
+        nom::sequence::tuple((T1::deserialize, T2::deserialize, T3::deserialize))(input)
+    }
+}
+impl<T1: Deserialize, T2: Deserialize, T3: Deserialize, T4: Deserialize> Deserialize
+    for (T1, T2, T3, T4)
+{
+    fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2, T3, T4)> {
+        nom::sequence::tuple((
+            T1::deserialize,
+            T2::deserialize,
+            T3::deserialize,
+            T4::deserialize,
+        ))(input)
+    }
+}
+
+impl<T1: Serialize, T2: Serialize> Serialize for (T1, T2) {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        self.0.serialize_to(target)?;
+        self.1.serialize_to(target)?;
+        Ok(())
+    }
+}
+impl<T1: Serialize, T2: Serialize, T3: Serialize> Serialize for (T1, T2, T3) {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        self.0.serialize_to(target)?;
+        self.1.serialize_to(target)?;
+        self.2.serialize_to(target)?;
+        Ok(())
+    }
+}
+
+impl<T1: Serialize, T2: Serialize, T3: Serialize, T4: Serialize> Serialize for (T1, T2, T3, T4) {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        self.0.serialize_to(target)?;
+        self.1.serialize_to(target)?;
+        self.2.serialize_to(target)?;
+        self.3.serialize_to(target)?;
+        Ok(())
+    }
+}
+
+impl<T1: Serialize, T2: Serialize, T3: Serialize, T4: Serialize, T5: Serialize> Serialize
+    for (T1, T2, T3, T4, T5)
+{
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        self.0.serialize_to(target)?;
+        self.1.serialize_to(target)?;
+        self.2.serialize_to(target)?;
+        self.3.serialize_to(target)?;
+        self.4.serialize_to(target)?;
+        Ok(())
+    }
 }

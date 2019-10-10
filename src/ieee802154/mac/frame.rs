@@ -1,13 +1,10 @@
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
-use crate::parse_serialize::Error as ParseError;
-use crate::parse_serialize::Result as ParseResult;
 use crate::parse_serialize::{
-    ParseFromBuf, ParseFromBufTagged, SerializeToBuf, SerializeToBufTagged,
+    Deserialize, DeserializeError, DeserializeResult, DeserializeTagged, Serialize, SerializeError,
+    SerializeResult, SerializeTagged,
 };
 use bitfield::bitfield;
 #[cfg(test)]
-use bytes::IntoBuf;
-use bytes::{Buf, BufMut, Bytes};
 use std::convert::{TryFrom, TryInto};
 
 /*=== Publicly accessible structures & enums ===*/
@@ -42,7 +39,7 @@ pub enum AssociationResponseStatus {
     HoppingSequenceOffsetDuplication = 3,
     FastAssociationSuccessful = 0x80,
 }
-default_parse_serialize_enum!(AssociationResponseStatus, u8);
+default_serialization_enum!(AssociationResponseStatus, u8);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Command {
@@ -91,7 +88,7 @@ pub struct Frame {
     pub destination: AddressSpecification,
     pub source: AddressSpecification,
     pub frame_type: FrameType,
-    pub payload: Bytes,
+    pub payload: Vec<u8>,
 }
 
 impl Frame {
@@ -110,7 +107,7 @@ impl Frame {
                 destination: AddressSpecification::None,
                 source: AddressSpecification::None,
                 frame_type: FrameType::Ack,
-                payload: Bytes::new(),
+                payload: vec![],
             })
         }
     }
@@ -175,13 +172,13 @@ bitfield! {
     pub frame_version, set_frame_version: 13, 12;
     pub source_addressing_mode, set_source_addressing_mode: 15, 14;
 }
-default_parse_serialize_newtype!(FrameControl, u16);
+default_serialization_newtype!(FrameControl, u16);
 
 #[test]
 fn test_frame_control_parsing() {
     // Beacon request
     let input: [u8; 2] = [0x03, 0x08];
-    let parsed = FrameControl::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = FrameControl::deserialize_complete(&input).unwrap();
     assert_eq!(parsed.frame_type(), 3);
     assert_eq!(parsed.security_enabled(), 0);
     assert_eq!(parsed.frame_pending(), 0);
@@ -196,7 +193,7 @@ fn test_frame_control_parsing() {
 
     // Link status
     let input: [u8; 2] = [0x41, 0x88];
-    let parsed = FrameControl::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = FrameControl::deserialize_complete(&input).unwrap();
     assert_eq!(parsed.frame_type(), 1);
     assert_eq!(parsed.security_enabled(), 0);
     assert_eq!(parsed.frame_pending(), 0);
@@ -211,7 +208,7 @@ fn test_frame_control_parsing() {
 
     // Beacon
     let input: [u8; 2] = [0x00, 0x80];
-    let parsed = FrameControl::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = FrameControl::deserialize_complete(&input).unwrap();
     assert_eq!(parsed.frame_type(), 0);
     assert_eq!(parsed.security_enabled(), 0);
     assert_eq!(parsed.frame_pending(), 0);
@@ -228,16 +225,12 @@ fn test_frame_control_parsing() {
 #[test]
 fn test_frame_control_serialize() {
     let input: [u8; 2] = [0x41, 0x88];
-    let parsed = FrameControl::parse_from_buf(&mut input.into_buf()).unwrap();
-    let mut buf = vec![];
-    parsed.serialize_to_buf(&mut buf).unwrap();
-    assert_eq!(buf, input);
+    let parsed = FrameControl::deserialize_complete(&input).unwrap();
+    assert_eq!(parsed.serialize().unwrap(), input);
 
     let input: [u8; 2] = [0x00, 0x80];
-    let parsed = FrameControl::parse_from_buf(&mut input.into_buf()).unwrap();
-    let mut buf = vec![];
-    parsed.serialize_to_buf(&mut buf).unwrap();
-    assert_eq!(buf, input);
+    let parsed = FrameControl::deserialize_complete(&input).unwrap();
+    assert_eq!(parsed.serialize().unwrap(), input);
 }
 
 bitfield! {
@@ -251,7 +244,7 @@ bitfield! {
     pub pan_coordinator, set_pan_coordinator: 14, 14;
     pub association_permit, set_association_permit: 15, 15;
 }
-default_parse_serialize_newtype!(SuperframeSpecification, u16);
+default_serialization_newtype!(SuperframeSpecification, u16);
 
 bitfield! {
     struct AssociationRequest(u8);
@@ -265,151 +258,174 @@ bitfield! {
     pub security_capability, set_security_capability: 6, 6;
     pub allocate_address, set_allocate_address: 7, 7;
 }
-default_parse_serialize_newtype!(AssociationRequest, u8);
+default_serialization_newtype!(AssociationRequest, u8);
 
-/*=== Serialization & parsing ===*/
+/**
+ * Not implementing Serialize & Deserialize, as these serializations take an extra parameter (PANID
+ * handling).
+ */
 impl AddressSpecification {
-    fn parse_from_buf(
-        buf: &mut Buf,
-        addressing_mode: u16,
-        use_panid: Option<PANID>,
-    ) -> Result<AddressSpecification, ParseError> {
-        match addressing_mode {
-            0 => Ok(AddressSpecification::None),
-            1 => Err(ParseError::Unimplemented(
-                "Unable to parse Frame with 'Reserved' address specification",
-            ))?,
-            2 => {
-                let panid = match use_panid {
-                    None => PANID::parse_from_buf(buf)?,
-                    Some(panid) => panid,
-                };
-                let address = ShortAddress::parse_from_buf(buf)?;
-                Ok(AddressSpecification::Short(panid, address))
-            }
-            3 => {
-                let panid = match use_panid {
-                    None => PANID::parse_from_buf(buf)?,
-                    Some(panid) => panid,
-                };
-                let address = ExtendedAddress::parse_from_buf(buf)?;
-                Ok(AddressSpecification::Extended(panid, address))
-            }
-            _ => Err(ParseError::UnexpectedData),
-        }
-    }
-
-    fn serialize_to_buf(&self, buf: &mut BufMut, skip_panid: bool) -> Result<(), ParseError> {
+    fn serialize_to(&self, skip_panid: bool, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
             AddressSpecification::None => Ok(()),
             AddressSpecification::Short(panid, address) => {
                 if !skip_panid {
-                    panid.serialize_to_buf(buf)?;
+                    panid.serialize_to(target)?;
                 }
-                address.serialize_to_buf(buf)
+                address.serialize_to(target)
             }
             AddressSpecification::Extended(panid, address) => {
                 if !skip_panid {
-                    panid.serialize_to_buf(buf)?;
+                    panid.serialize_to(target)?;
                 }
-                address.serialize_to_buf(buf)
+                address.serialize_to(target)
             }
         }
     }
 
-    fn get_serialize_tag(&self) -> Result<u16, ParseError> {
+    fn serialize_tag(&self) -> SerializeResult<u16> {
         Ok(match self {
             AddressSpecification::None => 0,
             AddressSpecification::Short(_, _) => 2,
             AddressSpecification::Extended(_, _) => 3,
         })
     }
+
+    fn deserialize(tag: u16, use_panid: Option<PANID>, input: &[u8]) -> DeserializeResult<Self> {
+        match tag {
+            0 => Ok((input, AddressSpecification::None)),
+            1 => Err(nom::Err::Error(DeserializeError::unimplemented(
+                input,
+                "Unable to parse Frame with 'Reserved' address specification",
+            ))),
+            2 => {
+                let (input, panid) = if let Some(panid) = use_panid {
+                    (input, panid)
+                } else {
+                    PANID::deserialize(input)?
+                };
+                let (input, address) = ShortAddress::deserialize(input)?;
+                Ok((input, AddressSpecification::Short(panid, address)))
+            }
+            3 => {
+                let (input, panid) = if let Some(panid) = use_panid {
+                    (input, panid)
+                } else {
+                    PANID::deserialize(input)?
+                };
+                let (input, address) = ExtendedAddress::deserialize(input)?;
+                Ok((input, AddressSpecification::Extended(panid, address)))
+            }
+            _ => Err(nom::Err::Error(DeserializeError::unexpected_data(input))),
+        }
+    }
 }
-impl ParseFromBuf for Command {
-    fn parse_from_buf(buf: &mut Buf) -> Result<Command, ParseError> {
-        let command_id = u8::parse_from_buf(buf)?;
+impl Deserialize for Command {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
+        let (input, command_id) = u8::deserialize(input)?;
         match command_id {
             1 => {
-                let bf = AssociationRequest::parse_from_buf(buf)?;
-                Ok(Command::AssociationRequest {
-                    alternate_pan_coordinator: bf.alternate_pan_coordinator() > 0,
-                    device_type: bf.device_type().try_into().unwrap(),
-                    power_source: bf.power_source().try_into().unwrap(),
-                    receive_on_when_idle: bf.receive_on_when_idle() > 0,
-                    security_capability: bf.security_capability() > 0,
-                    allocate_address: bf.allocate_address() > 0,
-                })
+                let (input, bf) = AssociationRequest::deserialize(input)?;
+                Ok((
+                    input,
+                    Command::AssociationRequest {
+                        alternate_pan_coordinator: bf.alternate_pan_coordinator() > 0,
+                        device_type: bf.device_type().try_into().unwrap(),
+                        power_source: bf.power_source().try_into().unwrap(),
+                        receive_on_when_idle: bf.receive_on_when_idle() > 0,
+                        security_capability: bf.security_capability() > 0,
+                        allocate_address: bf.allocate_address() > 0,
+                    },
+                ))
             }
             2 => {
-                let short_address = ShortAddress::parse_from_buf(buf)?;
-                let status = AssociationResponseStatus::parse_from_buf(buf)?;
-                Ok(Command::AssociationResponse {
-                    short_address,
-                    status,
-                })
+                let (input, short_address) = ShortAddress::deserialize(input)?;
+                let (input, status) = AssociationResponseStatus::deserialize(input)?;
+                Ok((
+                    input,
+                    Command::AssociationResponse {
+                        short_address,
+                        status,
+                    },
+                ))
             }
-            4 => Ok(Command::DataRequest),
-            7 => Ok(Command::BeaconRequest),
-            _ => Err(ParseError::Unimplemented("Command not implemented")),
+            4 => Ok((input, Command::DataRequest)),
+            7 => Ok((input, Command::BeaconRequest)),
+            _ => Err(nom::Err::Error(DeserializeError::unimplemented(
+                input,
+                "Command not implemented",
+            ))),
         }
     }
 }
 
-impl SerializeToBuf for Command {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+impl Serialize for Command {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
             Command::AssociationResponse {
                 short_address,
                 status,
-            } => {
-                (2 as u8).serialize_to_buf(buf)?;
-                short_address.serialize_to_buf(buf)?;
-                status.serialize_to_buf(buf)
-            }
-            _ => Err(ParseError::Unimplemented(
+            } => (2 as u8, short_address, status).serialize_to(target),
+            _ => Err(SerializeError::Unimplemented(
                 "Serialization of command not implemented",
             )),
         }
     }
 }
 
-impl ParseFromBufTagged<u16> for FrameType {
-    fn parse_from_buf(frame_type: u16, buf: &mut Buf) -> Result<FrameType, ParseError> {
+impl DeserializeTagged<u16> for FrameType {
+    fn deserialize(frame_type: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match frame_type {
             0 => {
-                let superframe_spec = SuperframeSpecification::parse_from_buf(buf)?;
-                let gts = u8::parse_from_buf(buf)?;
-                let pending_addresses = u8::parse_from_buf(buf)?;
+                let (input, (superframe_spec, gts, pending_addresses)) =
+                    <(SuperframeSpecification, u8, u8)>::deserialize(input)?;
                 if gts != 0 || pending_addresses != 0 {
-                    Err(ParseError::Unimplemented(
+                    Err(nom::Err::Error(DeserializeError::unimplemented(
+                        input,
                         "Beacon frame, GTS or pending addresses not empty",
-                    ))
+                    )))
                 } else {
-                    Ok(FrameType::Beacon {
-                        beacon_order: superframe_spec.beacon_order() as usize,
-                        superframe_order: superframe_spec.superframe_order() as usize,
-                        final_cap_slot: superframe_spec.final_cap_slot() as usize,
-                        battery_life_extension: superframe_spec.battery_life_extension() != 0,
-                        pan_coordinator: superframe_spec.pan_coordinator() != 0,
-                        association_permit: superframe_spec.association_permit() != 0,
-                    })
+                    Ok((
+                        input,
+                        FrameType::Beacon {
+                            beacon_order: superframe_spec.beacon_order() as usize,
+                            superframe_order: superframe_spec.superframe_order() as usize,
+                            final_cap_slot: superframe_spec.final_cap_slot() as usize,
+                            battery_life_extension: superframe_spec.battery_life_extension() != 0,
+                            pan_coordinator: superframe_spec.pan_coordinator() != 0,
+                            association_permit: superframe_spec.association_permit() != 0,
+                        },
+                    ))
                 }
             }
-            1 => Ok(FrameType::Data),
-            2 => Ok(FrameType::Ack),
-            3 => Ok(FrameType::Command(Command::parse_from_buf(buf)?)),
-            4 => Ok(FrameType::Reserved),
-            _ => Err(if frame_type > 7 {
-                ParseError::UnexpectedData
+            1 => Ok((input, FrameType::Data)),
+            2 => Ok((input, FrameType::Ack)),
+            3 => nom::combinator::map(Command::deserialize, FrameType::Command)(input),
+            4 => Ok((input, FrameType::Reserved)),
+            _ => Err(nom::Err::Error(if frame_type > 7 {
+                DeserializeError::unexpected_data(input)
             } else {
-                ParseError::Unimplemented("MAC Type not implemented")
-            }),
+                DeserializeError::unimplemented(input, "MAC Type not implemented")
+            })),
         }
     }
 }
 
-impl SerializeToBuf for FrameType {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+impl SerializeTagged<u16> for FrameType {
+    fn serialize_tag(&self) -> SerializeResult<u16> {
+        match self {
+            FrameType::Beacon { .. } => Ok(0),
+            FrameType::Data => Ok(1),
+            FrameType::Ack => Ok(2),
+            FrameType::Command(_) => Ok(3),
+            FrameType::Reserved => Ok(4),
+            _ => Err(SerializeError::Unimplemented("FrameType not implemented")),
+        }
+    }
+}
+
+impl Serialize for FrameType {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
             FrameType::Beacon {
                 beacon_order,
@@ -423,81 +439,65 @@ impl SerializeToBuf for FrameType {
                 ss.set_beacon_order(
                     (*beacon_order)
                         .try_into()
-                        .map_err(|_| ParseError::Unimplemented("Beacon order is too big"))?,
+                        .map_err(|_| SerializeError::Unimplemented("Beacon order is too big"))?,
                 );
                 ss.set_superframe_order(
-                    (*superframe_order)
-                        .try_into()
-                        .map_err(|_| ParseError::Unimplemented("Superframe order is too big"))?,
+                    (*superframe_order).try_into().map_err(|_| {
+                        SerializeError::Unimplemented("Superframe order is too big")
+                    })?,
                 );
                 ss.set_final_cap_slot(
                     (*final_cap_slot)
                         .try_into()
-                        .map_err(|_| ParseError::Unimplemented("Final cap slot is too big"))?,
+                        .map_err(|_| SerializeError::Unimplemented("Final cap slot is too big"))?,
                 );
                 ss.set_battery_life_extension((*battery_life_extension).into());
                 ss.set_reserved(0);
                 ss.set_pan_coordinator((*pan_coordinator).into());
                 ss.set_association_permit((*association_permit).into());
-                ss.serialize_to_buf(buf)?;
-                (0 as u8).serialize_to_buf(buf)?;
-                (0 as u8).serialize_to_buf(buf)?;
-                Ok(())
+                (ss, 0 as u8, 0 as u8).serialize_to(target)
             }
             FrameType::Data => Ok(()),
             FrameType::Ack => Ok(()),
-            FrameType::Command(cmd) => cmd.serialize_to_buf(buf),
-            _ => Err(ParseError::Unimplemented("Frametype not implemented")),
+            FrameType::Command(cmd) => cmd.serialize_to(target),
+            _ => Err(SerializeError::Unimplemented("Frametype not implemented")),
         }
     }
 }
 
-impl SerializeToBufTagged<u16> for FrameType {
-    fn get_serialize_tag(&self) -> Result<u16, ParseError> {
-        match self {
-            FrameType::Beacon { .. } => Ok(0),
-            FrameType::Data => Ok(1),
-            FrameType::Ack => Ok(2),
-            FrameType::Command(_) => Ok(3),
-            FrameType::Reserved => Ok(4),
-            _ => Err(ParseError::Unimplemented("FrameType not implemented")),
-        }
-    }
-}
-
-impl ParseFromBuf for Frame {
-    fn parse_from_buf(buf: &mut Buf) -> Result<Frame, ParseError> {
-        let fsf = FrameControl::parse_from_buf(buf)?;
+impl Deserialize for Frame {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Frame> {
+        let (input, fsf) = FrameControl::deserialize(input)?;
         let frame_pending = fsf.frame_pending() > 0;
         let acknowledge_request = fsf.acknowledge_request() > 0;
-        let sequence_number = if fsf.sequence_number_supression() != 0 {
-            None
-        } else {
-            Some(u8::parse_from_buf(buf)?)
-        };
-        let destination =
-            AddressSpecification::parse_from_buf(buf, fsf.destination_addressing_mode(), None)?;
+        let (input, sequence_number) =
+            nom::combinator::cond(fsf.sequence_number_supression() == 0, u8::deserialize)(input)?;
+        let (input, destination) =
+            AddressSpecification::deserialize(fsf.destination_addressing_mode(), None, input)?;
         let source_pan_compression: Option<PANID> = if fsf.pan_id_compression() != 0 {
             destination.into()
         } else {
             None
         };
-        let source = AddressSpecification::parse_from_buf(
-            buf,
+        let (input, source) = AddressSpecification::deserialize(
             fsf.source_addressing_mode(),
             source_pan_compression,
+            input,
         )?;
-        let frame_type = FrameType::parse_from_buf(fsf.frame_type(), buf)?;
-        let payload = buf.collect();
-        Ok(Frame {
-            frame_pending,
-            acknowledge_request,
-            sequence_number,
-            destination,
-            source,
-            frame_type,
-            payload,
-        })
+        let (input, frame_type) = FrameType::deserialize(fsf.frame_type(), input)?;
+        let (input, payload) = nom::combinator::rest(input)?;
+        Ok((
+            input,
+            Frame {
+                frame_pending,
+                acknowledge_request,
+                sequence_number,
+                destination,
+                source,
+                frame_type,
+                payload: payload.to_vec(),
+            },
+        ))
     }
 }
 
@@ -505,7 +505,7 @@ impl ParseFromBuf for Frame {
 fn test_parse_mac_frame() {
     // Beacon request
     let input: [u8; 8] = [0x03, 0x08, 0xa5, 0xFF, 0xFF, 0xFF, 0xFF, 0x07];
-    let parsed = Frame::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = Frame::deserialize_complete(&input).unwrap();
     assert_eq!(
         parsed,
         Frame {
@@ -515,7 +515,7 @@ fn test_parse_mac_frame() {
             destination: (PANID::broadcast(), ShortAddress::broadcast()).into(),
             source: AddressSpecification::None,
             frame_type: FrameType::Command(Command::BeaconRequest),
-            payload: Bytes::new()
+            payload: vec![]
         }
     );
 
@@ -525,7 +525,7 @@ fn test_parse_mac_frame() {
         0x01, 0x13, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x28, 0x02, 0x00, 0x00, 0x00, 0x15,
         0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0x00, 0x71, 0x50, 0x83, 0x72, 0x0c, 0xe4,
     ];
-    let parsed = Frame::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = Frame::deserialize_complete(&input).unwrap();
     assert_eq!(
         parsed,
         Frame {
@@ -535,7 +535,7 @@ fn test_parse_mac_frame() {
             destination: (PANID(0x7698), ShortAddress::broadcast()).into(),
             source: (PANID(0x7698), ShortAddress(0)).into(),
             frame_type: FrameType::Data,
-            payload: Bytes::from(&input[9..])
+            payload: input[9..].to_vec()
         }
     );
 
@@ -544,7 +544,7 @@ fn test_parse_mac_frame() {
         0x00, 0x80, 0x40, 0x98, 0x76, 0x00, 0x00, 0xff, 0xcf, 0x00, 0x00, 0x00, 0x22, 0x84, 0x15,
         0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xff, 0xff, 0xff, 0x00,
     ];
-    let parsed = Frame::parse_from_buf(&mut input.into_buf()).unwrap();
+    let parsed = Frame::deserialize_complete(&input).unwrap();
     assert_eq!(
         parsed,
         Frame {
@@ -561,15 +561,15 @@ fn test_parse_mac_frame() {
                 pan_coordinator: true,
                 association_permit: true,
             },
-            payload: Bytes::from(&input[11..])
+            payload: input[11..].to_vec()
         }
     );
 }
 
-impl SerializeToBuf for Frame {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+impl Serialize for Frame {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         let mut fsf = FrameControl(0);
-        fsf.set_frame_type(self.frame_type.get_serialize_tag()?);
+        fsf.set_frame_type(self.frame_type.serialize_tag()?);
         fsf.set_security_enabled(0);
         fsf.set_frame_pending(self.frame_pending.into());
         fsf.set_acknowledge_request(self.acknowledge_request.into());
@@ -580,17 +580,17 @@ impl SerializeToBuf for Frame {
         fsf.set_reserved(0);
         fsf.set_sequence_number_supression(self.sequence_number.is_none().into());
         fsf.set_information_elements_present(0);
-        fsf.set_destination_addressing_mode(self.destination.get_serialize_tag()?);
+        fsf.set_destination_addressing_mode(self.destination.serialize_tag()?);
         fsf.set_frame_version(0);
-        fsf.set_source_addressing_mode(self.source.get_serialize_tag()?);
-        fsf.serialize_to_buf(buf)?;
+        fsf.set_source_addressing_mode(self.source.serialize_tag()?);
+        fsf.serialize_to(target)?;
         if let Some(x) = self.sequence_number {
-            x.serialize_to_buf(buf)?;
+            x.serialize_to(target)?;
         }
-        self.destination.serialize_to_buf(buf, false)?;
-        self.source.serialize_to_buf(buf, pan_id_compression)?;
-        self.frame_type.serialize_to_buf(buf)?;
-        self.payload.serialize_to_buf(buf)?;
+        self.destination.serialize_to(false, target)?;
+        self.source.serialize_to(pan_id_compression, target)?;
+        self.frame_type.serialize_to(target)?;
+        target.extend_from_slice(&self.payload);
         Ok(())
     }
 }
@@ -611,16 +611,14 @@ fn test_serialize_mac_frame() {
             pan_coordinator: true,
             association_permit: true,
         },
-        payload: Bytes::from(&b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00"[..]),
+        payload: b"\x00\x22\x84\x15\x68\x89\x0e\x00\x4b\x12\x00\xff\xff\xff\x00".to_vec(),
     };
-    let mut buf = vec![];
-    input.serialize_to_buf(&mut buf).unwrap();
     assert_eq!(
         vec![
             0x00, 0x80, 0x40, 0x98, 0x76, 0x00, 0x00, 0xFF, 0xCF, 0x00, 0x00, 0x00, 0x22, 0x84,
             0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF, 0x00
         ],
-        buf
+        input.serialize().unwrap()
     );
 
     let input = Frame {
@@ -633,15 +631,13 @@ fn test_serialize_mac_frame() {
             short_address: ShortAddress(0x558b),
             status: AssociationResponseStatus::AssociationSuccessful,
         }),
-        payload: Bytes::new(),
+        payload: vec![],
     };
-    let mut buf = vec![];
-    input.serialize_to_buf(&mut buf).unwrap();
     assert_eq!(
         vec![
             0x63, 0xcc, 0x0a, 0x98, 0x76, 0x06, 0x63, 0x1c, 0xfe, 0xff, 0x5e, 0xcf, 0xd0, 0x15,
             0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0x02, 0x8b, 0x55, 0x00,
         ],
-        buf
+        input.serialize().unwrap()
     );
 }

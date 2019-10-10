@@ -181,11 +181,11 @@ macro_rules! default_param_get_set{
 
 impl RadioBridgeService {
     pub fn new(
-        serial_output: Box<Sink<serial_protocol::Command, Error = io::Error> + Unpin + Send>,
+        serial_output: Box<dyn Sink<serial_protocol::Command, Error = io::Error> + Unpin + Send>,
         serial_input: Box<
-            Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
+            dyn Stream<Item = Result<serial_protocol::Command, io::Error>> + Unpin + Send,
         >,
-        handle: &mut Spawn,
+        handle: &mut dyn Spawn,
     ) -> (RadioBridgeService, mpsc::UnboundedReceiver<IncomingPacket>) {
         let (raw_service, packet_stream) =
             raw_service::RadioBridgeService::new(serial_output, serial_input, handle);
@@ -291,9 +291,8 @@ impl RadioBridgeService {
                         }),
                 )
             }
-            Err(x) => {
-                Box::new(future::err(x)) as Box<Future<Output = Result<(), Error>> + Send + Unpin>
-            }
+            Err(x) => Box::new(future::err(x))
+                as Box<dyn Future<Output = Result<(), Error>> + Send + Unpin>,
         }
     }
 

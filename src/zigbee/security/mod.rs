@@ -3,17 +3,16 @@ pub mod ccmstar;
 pub mod mmohash;
 
 use crate::ieee802154::ExtendedAddress;
-use crate::parse_serialize;
 use crate::parse_serialize::{
-    ParseFromBuf, ParseFromBufEx, ParseFromBufTagged, Result as ParseResult, SerializeToBuf,
-    SerializeToBufEx, SerializeToBufTagged,
+    Deserialize, DeserializeError, DeserializeResult, DeserializeTagged, Serialize,
+    SerializeResult, SerializeTagged,
 };
 use aead::Aead;
 use bitfield::bitfield;
 use block_cipher_trait::BlockCipher;
-use bytes::{Buf, BufMut, Bytes};
 use crypto_mac::Mac;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::result::Result;
 
 #[derive(Clone, Copy)]
@@ -67,19 +66,17 @@ impl Into<u8> for SecurityLevel {
     }
 }
 
-impl SerializeToBuf for KeyIdentifier {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+impl Serialize for KeyIdentifier {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
-            KeyIdentifier::Network(key_sequence_number) => {
-                key_sequence_number.serialize_to_buf(buf)
-            }
+            KeyIdentifier::Network(key_sequence_number) => key_sequence_number.serialize_to(target),
             _ => Ok(()),
         }
     }
 }
 
-impl SerializeToBufTagged<u8> for KeyIdentifier {
-    fn get_serialize_tag(&self) -> ParseResult<u8> {
+impl SerializeTagged<u8> for KeyIdentifier {
+    fn serialize_tag(&self) -> SerializeResult<u8> {
         Ok(match self {
             KeyIdentifier::Data => 0,
             KeyIdentifier::Network(_) => 1,
@@ -89,14 +86,14 @@ impl SerializeToBufTagged<u8> for KeyIdentifier {
     }
 }
 
-impl ParseFromBufTagged<u8> for KeyIdentifier {
-    fn parse_from_buf(tag: u8, buf: &mut Buf) -> ParseResult<Self> {
+impl DeserializeTagged<u8> for KeyIdentifier {
+    fn deserialize(tag: u8, input: &[u8]) -> DeserializeResult<Self> {
         match tag {
-            0 => Ok(KeyIdentifier::Data),
-            1 => Ok(KeyIdentifier::Network(u8::parse_from_buf(buf)?)),
-            2 => Ok(KeyIdentifier::KeyTransport),
-            3 => Ok(KeyIdentifier::KeyLoad),
-            _ => Err(parse_serialize::Error::UnexpectedData),
+            0 => Ok((input, KeyIdentifier::Data)),
+            1 => nom::combinator::map(u8::deserialize, KeyIdentifier::Network)(input),
+            2 => Ok((input, KeyIdentifier::KeyTransport)),
+            3 => Ok((input, KeyIdentifier::KeyLoad)),
+            _ => DeserializeError::unexpected_data(input).into(),
         }
     }
 }
@@ -105,7 +102,7 @@ pub struct SecuredData {
     key_identifier: KeyIdentifier,
     frame_counter: u32,
     extended_source: Option<ExtendedAddress>,
-    payload: Bytes,
+    payload: Vec<u8>,
 }
 
 bitfield! {
@@ -117,48 +114,47 @@ bitfield! {
     pub extended_nonce, set_extended_nonce: 5, 5;
     pub reserved, set_reserved: 7, 6;
 }
-default_parse_serialize_newtype!(SecurityControl, u8);
+default_serialization_newtype!(SecurityControl, u8);
 
-impl SerializeToBuf for SecuredData {
-    fn serialize_to_buf(&self, buf: &mut BufMut) -> ParseResult<()> {
+impl Serialize for SecuredData {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         let mut sc = SecurityControl(0);
         sc.set_security_level(0); // Always set as 0 on air.
-        sc.set_key_identifier(self.key_identifier.get_serialize_tag()?);
+        sc.set_key_identifier(self.key_identifier.serialize_tag()?);
         sc.set_extended_nonce(self.extended_source.is_some() as u8);
         sc.set_reserved(0);
-        sc.serialize_to_buf(buf)?;
-        self.frame_counter.serialize_to_buf(buf)?;
+        sc.serialize_to(target)?;
+        self.frame_counter.serialize_to(target)?;
         if let Some(source) = self.extended_source {
-            source.serialize_to_buf(buf)?;
+            source.serialize_to(target)?;
         }
-        self.key_identifier.serialize_to_buf(buf)?;
-        self.payload.serialize_to_buf(buf)?;
+        self.key_identifier.serialize_to(target)?;
+        target.extend_from_slice(&self.payload);
         Ok(())
     }
 }
 
-impl ParseFromBuf for SecuredData {
-    fn parse_from_buf(buf: &mut Buf) -> ParseResult<Self> {
-        let sc = SecurityControl::parse_from_buf(buf)?;
+impl Deserialize for SecuredData {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
+        let (input, sc) = SecurityControl::deserialize(input)?;
         if sc.security_level() != 0 {
             // On the wire, this should always be set to 0
-            return Err(parse_serialize::Error::UnexpectedData);
+            return DeserializeError::unexpected_data(input).into();
         }
-        let frame_counter = u32::parse_from_buf(buf)?;
-        let extended_source = if sc.extended_nonce() != 0 {
-            Some(ExtendedAddress::parse_from_buf(buf)?)
-        } else {
-            None
-        };
-        let key_identifier = KeyIdentifier::parse_from_buf(sc.key_identifier(), buf)?;
-        let payload = Bytes::from(buf.bytes());
-        buf.advance(payload.len());
-        Ok(SecuredData {
-            key_identifier,
-            frame_counter,
-            extended_source,
-            payload,
-        })
+        let (input, frame_counter) = u32::deserialize(input)?;
+        let (input, extended_source) =
+            nom::combinator::cond(sc.extended_nonce() != 0, ExtendedAddress::deserialize)(input)?;
+        let (input, key_identifier) = KeyIdentifier::deserialize(sc.key_identifier(), input)?;
+        let (input, payload) = nom::combinator::rest(input)?;
+        Ok((
+            input,
+            SecuredData {
+                key_identifier,
+                frame_counter,
+                extended_source,
+                payload: payload.to_vec(),
+            },
+        ))
     }
 }
 
@@ -191,16 +187,17 @@ fn generate_nonce(
     security_level: SecurityLevel,
     source_address: ExtendedAddress,
 ) -> Option<[u8; 15]> {
-    let mut nonce = std::io::Cursor::new([0; 15]);
-    source_address.serialize_to_buf(&mut nonce).ok()?;
-    nonce.put_u32_le(frame_counter);
+    let mut nonce = vec![];
+    source_address.serialize_to(&mut nonce).ok()?;
+    frame_counter.serialize_to(&mut nonce).ok()?;
     let mut sc = SecurityControl(0);
     sc.set_security_level(security_level.into());
-    sc.set_key_identifier(key_identifier.get_serialize_tag().ok()?);
+    sc.set_key_identifier(key_identifier.serialize_tag().ok()?);
     sc.set_extended_nonce(extended_nonce as u8);
     sc.set_reserved(0);
-    nonce.put_u8(sc.0);
-    Some(nonce.into_inner())
+    sc.serialize_to(&mut nonce).ok()?;
+    nonce.resize(15, 0);
+    nonce.as_slice().try_into().ok()
 }
 
 fn generate_associated_data(
@@ -208,21 +205,21 @@ fn generate_associated_data(
     frame_counter: u32,
     extended_source: Option<ExtendedAddress>,
     security_level: SecurityLevel,
-    buf: &mut BufMut,
-) -> ParseResult<()> {
+    target: &mut Vec<u8>,
+) -> SerializeResult<()> {
     // This function is slightly different from the serialize_to_buf,
     // as in this case the security level *is* serialized.
     let mut sc = SecurityControl(0);
     sc.set_security_level(security_level.into());
-    sc.set_key_identifier(key_identifier.get_serialize_tag()?);
+    sc.set_key_identifier(key_identifier.serialize_tag()?);
     sc.set_extended_nonce(extended_source.is_some() as u8);
     sc.set_reserved(0);
-    sc.serialize_to_buf(buf)?;
-    frame_counter.serialize_to_buf(buf)?;
+    sc.serialize_to(target)?;
+    frame_counter.serialize_to(target)?;
     if let Some(source) = extended_source {
-        source.serialize_to_buf(buf)?;
+        source.serialize_to(target)?;
     }
-    key_identifier.serialize_to_buf(buf)?;
+    key_identifier.serialize_to(target)?;
     Ok(())
 }
 
@@ -243,14 +240,14 @@ impl SecuredData {
     fn generate_associated_data(
         &self,
         security_level: SecurityLevel,
-        buf: &mut BufMut,
-    ) -> ParseResult<()> {
+        target: &mut Vec<u8>,
+    ) -> SerializeResult<()> {
         generate_associated_data(
             self.key_identifier,
             self.frame_counter,
             self.extended_source,
             security_level,
-            buf,
+            target,
         )
     }
     pub fn decrypt(
@@ -286,9 +283,9 @@ impl SecuredData {
                 return None; // Payload not big enough
             }
             let tag_start = payload_len - tag_size;
-            let message = self.payload.slice_to(tag_start);
-            let tag = self.payload.slice_from(tag_start);
-            associated_data.put(message.as_ref());
+            let message = &self.payload[0..tag_start];
+            let tag = &self.payload[tag_start..];
+            associated_data.extend_from_slice(message);
             ccmstar
                 .decrypt(
                     &nonce.into(),
@@ -298,7 +295,7 @@ impl SecuredData {
                     },
                 )
                 .ok()?;
-            Some(message.as_ref().into())
+            Some(message.into())
         }
     }
 
@@ -349,7 +346,7 @@ impl SecuredData {
                 )
                 .ok()?
         } else {
-            associated_data.put(&plaintext);
+            associated_data.extend_from_slice(&plaintext);
             let empty: [u8; 0] = [];
             let tag = ccmstar
                 .encrypt(
@@ -361,7 +358,7 @@ impl SecuredData {
                 )
                 .ok()?;
             let mut payload = plaintext.clone();
-            payload.put(&tag);
+            payload.extend(tag);
             payload
         };
         Some(SecuredData {
@@ -393,7 +390,7 @@ fn test_decode_transport_key() {
         0x8a, 0x23, 0xb9, 0x6c, 0x3b, 0x80, 0xf0, 0xad, 0x27, 0x1c, 0x59, 0x8a, 0xdf, 0x27, 0xbc,
         0x21, 0xc7, 0x47, 0xf0, 0x31, 0x74, 0x80, 0xbc, 0x8c, 0x53, 0x88, 0x11, 0x8f, 0x02,
     ];
-    let parsed = SecuredData::parse_from_vec(&secured_frame).unwrap();
+    let parsed = SecuredData::deserialize_complete(&secured_frame).unwrap();
     let header = vec![0x21, 0x06]; // Application Support Layer header
     let source_address = ExtendedAddress(0x00124b000e896815);
     let expected_plaintext = vec![
@@ -421,6 +418,6 @@ fn test_decode_transport_key() {
         &keystore,
     )
     .unwrap();
-    let recrypted = recrypted.serialize_as_vec().unwrap();
+    let recrypted = recrypted.serialize().unwrap();
     assert_eq!(recrypted, secured_frame);
 }

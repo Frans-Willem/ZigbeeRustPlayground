@@ -107,7 +107,7 @@ where
     K: 'static,
     V: 'static,
 {
-    pub fn new(handle: Box<CloneSpawn>) -> Self {
+    pub fn new(handle: Box<dyn CloneSpawn>) -> Self {
         let inner = CacheMapInternal::new();
         let inner = Arc::new(Mutex::new(inner));
         let pollme = CacheMapPollMe(inner.clone());

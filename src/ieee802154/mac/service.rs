@@ -2,15 +2,13 @@ use crate::ieee802154::mac::frame::*;
 use crate::ieee802154::mac::mru_address_set::{MRUAddressSet, MRUAddressSetAction};
 use crate::ieee802154::mac::queue::{Queue, QueueError, QueueEvent};
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
-use crate::parse_serialize::Error as ParseError;
-use crate::parse_serialize::{ParseFromBuf, SerializeToBuf};
+use crate::parse_serialize::{Deserialize, Serialize, SerializeError};
 use crate::radio_bridge::service::Error as RadioError;
 use crate::radio_bridge::service::IncomingPacket as RadioPacket;
 use crate::radio_bridge::service::RadioBridgeService as RadioService;
 use crate::radio_bridge::service::RadioRxMode;
 use crate::CloneSpawn;
 use bimap::BiHashMap;
-use bytes::{Bytes, IntoBuf};
 use futures::future::{Future, FutureExt, TryFutureExt};
 use futures::stream::Stream;
 use futures::task::{Context, Poll, SpawnExt};
@@ -22,8 +20,8 @@ struct NodeInformation {
 }
 
 pub struct Service {
-    handle: Box<CloneSpawn>,
-    packet_stream: Box<Stream<Item = RadioPacket> + Unpin + Send>,
+    handle: Box<dyn CloneSpawn>,
+    packet_stream: Box<dyn Stream<Item = RadioPacket> + Unpin + Send>,
     radio: RadioService,
     sequence_number: u8,
     pan_id: PANID,
@@ -32,7 +30,8 @@ pub struct Service {
     associations: BiHashMap<ShortAddress, ExtendedAddress>,
     nodeinfo: HashMap<ExtendedAddress, NodeInformation>,
     queue: Queue,
-    inflight: HashMap<AddressSpecification, Box<Future<Output = Result<(), Error>> + Send + Unpin>>,
+    inflight:
+        HashMap<AddressSpecification, Box<dyn Future<Output = Result<(), Error>> + Send + Unpin>>,
     pending_data_set: MRUAddressSet,
 }
 
@@ -49,7 +48,7 @@ pub enum Event {
 pub enum Error {
     RadioError(RadioError),
     Unimplemented,
-    SerializationError(ParseError),
+    SerializationError(SerializeError),
     NodeNotAssociated,
     QueueError(QueueError),
 }
@@ -62,9 +61,9 @@ impl From<QueueError> for Error {
 
 impl Service {
     pub fn new(
-        handle: Box<CloneSpawn>,
+        handle: Box<dyn CloneSpawn>,
         radio: RadioService,
-        packet_stream: Box<Stream<Item = RadioPacket> + Send + Unpin>,
+        packet_stream: Box<dyn Stream<Item = RadioPacket> + Send + Unpin>,
         channel: u16,
         short_address: ShortAddress,
         pan_id: PANID,
@@ -153,12 +152,12 @@ impl Service {
     }
 
     fn handle_packet(&mut self, packet: RadioPacket) -> Option<Event> {
-        match Frame::parse_from_buf(&mut packet.packet.clone().into_buf()) {
+        match Frame::deserialize(&packet.packet) {
             Err(e) => {
                 eprintln!("Unable to parse MAC packet, {:?}: {:?}", e, packet.packet);
                 None
             }
-            Ok(frame) => self.handle_frame(frame, packet.rssi, packet.link_quality),
+            Ok((_, frame)) => self.handle_frame(frame, packet.rssi, packet.link_quality),
         }
     }
 
@@ -169,9 +168,9 @@ impl Service {
 
     fn send_frame_noqueue(&mut self, frame: Frame) -> impl Future<Output = Result<(), Error>> {
         let mut serialized = vec![];
-        if let Err(e) = frame.serialize_to_buf(&mut serialized) {
+        if let Err(e) = frame.serialize_to(&mut serialized) {
             Box::new(futures::future::err(Error::SerializationError(e)))
-                as Box<Future<Output = Result<(), Error>> + Unpin + Send>
+                as Box<dyn Future<Output = Result<(), Error>> + Unpin + Send>
         } else {
             Box::new(
                 self.radio
@@ -181,7 +180,7 @@ impl Service {
         }
     }
 
-    pub fn send_beacon(&mut self, payload: Bytes) -> impl Future<Output = Result<(), Error>> {
+    pub fn send_beacon(&mut self, payload: Vec<u8>) -> impl Future<Output = Result<(), Error>> {
         //TODO: Implement this!
         let beacon = Frame {
             frame_pending: false,
@@ -308,12 +307,12 @@ impl Service {
                     short_address: short_address,
                     status: AssociationResponseStatus::AssociationSuccessful,
                 }),
-                payload: Bytes::new(),
+                payload: vec![],
             };
             Box::new(self.send_frame_queued(frame))
         } else {
             Box::new(futures::future::err(Error::NodeNotAssociated))
-                as Box<Future<Output = Result<(), Error>> + Send + Unpin>
+                as Box<dyn Future<Output = Result<(), Error>> + Send + Unpin>
         }
     }
 }
