@@ -75,8 +75,7 @@ pub trait Deserialize: Sized {
     }
 }
 
-pub trait DeserializeTagged: Sized {
-    type TagType;
+pub trait DeserializeTagged: SerializeTagged + Sized {
     fn deserialize(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
 }
 
@@ -91,8 +90,8 @@ pub trait Serialize: Sized {
     }
 }
 
-pub trait SerializeTagged: Serialize {
-    type TagType;
+pub trait SerializeTagged {
+    type TagType : Copy;
     fn serialize_tag(&self) -> SerializeResult<Self::TagType>;
 }
 

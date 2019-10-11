@@ -3,7 +3,7 @@ use crate::parse_serialize::{
     Deserialize, DeserializeError, DeserializeResult, DeserializeTagged, Serialize, SerializeError,
     SerializeResult, SerializeTagged,
 };
-use crate::zigbee::security::{KeyIdentifier, MaybeSecured, SecuredData};
+use crate::zigbee::security::{KeyIdentifier, SecurableTagged, SecuredData};
 use bitfield::bitfield;
 use std::convert::{TryFrom, TryInto};
 
@@ -11,27 +11,10 @@ use std::convert::{TryFrom, TryInto};
 pub enum Command {}
 
 #[derive(PartialEq, Eq, Debug)]
-pub struct UntypedPayload(pub Vec<u8>);
-
-impl Serialize for UntypedPayload {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        target.extend_from_slice(&self.0);
-        Ok(())
-    }
-}
-
-impl Deserialize for UntypedPayload {
-    fn deserialize(input: &[u8]) -> DeserializeResult<UntypedPayload> {
-        let (input, data) = nom::combinator::rest(input)?;
-        Ok((input, UntypedPayload(data.to_vec())))
-    }
-}
-
-#[derive(PartialEq, Eq, Debug)]
 pub enum FrameType {
-    Data(MaybeSecured<UntypedPayload>),
-    Command(MaybeSecured<Command>),
-    InterPAN(MaybeSecured<UntypedPayload>),
+    Data(Vec<u8>),
+    Command(Vec<u8>),
+    InterPAN(Vec<u8>),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, TryFromPrimitive)]
@@ -49,7 +32,7 @@ pub struct SourceRoute {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Frame {
-    frame_type: FrameType,
+    frame_type: SecurableTagged<FrameType>,
     protocol_version: u8,
     destination: ShortAddress,
     source: ShortAddress,
@@ -147,7 +130,7 @@ impl Deserialize for Frame {
         let (input, source_route) =
             nom::combinator::cond(fsf.source_route() != 0, SourceRoute::deserialize)(input)?;
         let (input, frame_type) =
-            FrameType::deserialize((fsf.security() != 0, fsf.frame_type()), input)?;
+            SecurableTagged::deserialize((fsf.security() != 0, fsf.frame_type()), input)?;
         Ok((
             input,
             Frame {
@@ -169,34 +152,25 @@ impl Deserialize for Frame {
 impl Serialize for FrameType {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
-            FrameType::Data(payload) => payload.serialize_to(target),
+            FrameType::Data(payload) => { target.extend(payload); Ok(()) },
             _ => Err(SerializeError::Unimplemented("Not yet implemented")),
         }
     }
 }
 impl SerializeTagged for FrameType {
-    type TagType = (bool, u16);
-    fn serialize_tag(&self) -> SerializeResult<(bool, u16)> {
-        match self {
-            FrameType::Data(d) => Ok((d.serialize_tag()?, 0)),
-            _ => Err(SerializeError::Unimplemented(
-                "Not yet implemented frame type",
-            )),
-            /*
-            FrameType::Command(d) => (d.serialize_tag()?, 1),
-            FrameType::InterPAN(d) => (d.serialize_tag()?, 3),
-            */
-        }
+    type TagType = u16;
+    fn serialize_tag(&self) -> SerializeResult<u16> {
+        Ok(match self {
+            FrameType::Data(_) => 0,
+            FrameType::Command(_) => 1,
+            FrameType::InterPAN(_) => 3,
+        })
     }
 }
 impl DeserializeTagged for FrameType {
-    type TagType = (bool, u16);
-    fn deserialize(tag: (bool, u16), input: &[u8]) -> DeserializeResult<FrameType> {
-        match tag.1 {
-            0 => {
-                let (input, payload) = MaybeSecured::deserialize(tag.0, input)?;
-                Ok((input, FrameType::Data(payload)))
-            }
+    fn deserialize(tag: u16, input: &[u8]) -> DeserializeResult<FrameType> {
+        match tag {
+            0 => nom::combinator::map(nom::combinator::rest, |rest: &[u8]| FrameType::Data(rest.to_vec()))(input),
             _ => DeserializeError::unexpected_data(input).into(),
         }
     }
@@ -234,12 +208,12 @@ impl Deserialize for SourceRoute {
 fn test_zigbee_nwk_frame_transport_key() {
     // Transport key transmission
     let frame = Frame {
-        frame_type: FrameType::Data(MaybeSecured::Unsecured(UntypedPayload(vec![
+        frame_type: SecurableTagged::Unsecured(FrameType::Data(vec![
             0x21, 0x05, 0x10, 0x00, 0x00, 0x00, 0x00, 0xd8, 0x5b, 0x3a, 0x13, 0x09, 0xff, 0x1b,
             0x1b, 0x97, 0x71, 0xa2, 0xaa, 0xda, 0x9f, 0x3b, 0x2b, 0x25, 0x14, 0x35, 0x32, 0x29,
             0x94, 0xd3, 0xf3, 0xd1, 0xa2, 0x98, 0xda, 0x93, 0x66, 0x9c, 0x8d, 0xff, 0x67, 0x73,
             0xef, 0x5f, 0x94, 0xc5,
-        ]))),
+        ])),
         protocol_version: 2,
         destination: ShortAddress(0x558b),
         source: ShortAddress(0),
@@ -263,7 +237,7 @@ fn test_zigbee_nwk_frame_transport_key() {
 #[test]
 fn test_zigbee_nwk_frame_device_announcement() {
     let frame = Frame {
-        frame_type: FrameType::Data(MaybeSecured::Secured(SecuredData {
+        frame_type: SecurableTagged::Secured(0, SecuredData {
             key_identifier: KeyIdentifier::Network(0),
             frame_counter: 0,
             extended_source: Some(ExtendedAddress(0xd0cf5efffe1c6306)),
@@ -271,7 +245,7 @@ fn test_zigbee_nwk_frame_device_announcement() {
                 0x6c, 0x41, 0xb1, 0x8d, 0x1c, 0xf1, 0x21, 0xc4, 0x53, 0xc8, 0xd9, 0xcf, 0xa5, 0xf2,
                 0xbc, 0x17, 0x9c, 0xfb, 0xee, 0x40, 0x03, 0x78, 0x23, 0x2d,
             ],
-        })),
+        }),
         protocol_version: 2,
         destination: ShortAddress(0xFFFD),
         source: ShortAddress(0x558B),

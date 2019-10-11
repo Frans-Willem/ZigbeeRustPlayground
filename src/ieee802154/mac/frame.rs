@@ -374,7 +374,6 @@ impl Serialize for Command {
 }
 
 impl DeserializeTagged for FrameType {
-    type TagType = u16;
     fn deserialize(frame_type: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match frame_type {
             0 => {
