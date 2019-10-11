@@ -91,7 +91,7 @@ pub trait Serialize: Sized {
 }
 
 pub trait SerializeTagged {
-    type TagType : Copy;
+    type TagType: Copy;
     fn serialize_tag(&self) -> SerializeResult<Self::TagType>;
 }
 
