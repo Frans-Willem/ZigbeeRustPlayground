@@ -1,4 +1,6 @@
+use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
+use std::iter::FromIterator;
 
 #[derive(Debug)]
 pub enum SerializeError {
@@ -243,5 +245,23 @@ impl<T1: Serialize, T2: Serialize, T3: Serialize, T4: Serialize, T5: Serialize> 
         self.3.serialize_to(target)?;
         self.4.serialize_to(target)?;
         Ok(())
+    }
+}
+
+impl<T: Serialize, N: ArrayLength<T>> Serialize for GenericArray<T, N> {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        for i in self {
+            i.serialize_to(target)?;
+        }
+        Ok(())
+    }
+}
+
+impl<T: Deserialize, N: ArrayLength<T>> Deserialize for GenericArray<T, N> {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
+        nom::combinator::map(
+            nom::multi::count(T::deserialize, N::to_usize()),
+            |vec: Vec<T>| GenericArray::from_iter(vec.into_iter()),
+        )(input)
     }
 }
