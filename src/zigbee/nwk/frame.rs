@@ -152,7 +152,10 @@ impl Deserialize for Frame {
 impl Serialize for FrameType {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
-            FrameType::Data(payload) => { target.extend(payload); Ok(()) },
+            FrameType::Data(payload) => {
+                target.extend(payload);
+                Ok(())
+            }
             _ => Err(SerializeError::Unimplemented("Not yet implemented")),
         }
     }
@@ -170,7 +173,9 @@ impl SerializeTagged for FrameType {
 impl DeserializeTagged for FrameType {
     fn deserialize(tag: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match tag {
-            0 => nom::combinator::map(nom::combinator::rest, |rest: &[u8]| FrameType::Data(rest.to_vec()))(input),
+            0 => nom::combinator::map(nom::combinator::rest, |rest: &[u8]| {
+                FrameType::Data(rest.to_vec())
+            })(input),
             _ => DeserializeError::unexpected_data(input).into(),
         }
     }
@@ -237,15 +242,18 @@ fn test_zigbee_nwk_frame_transport_key() {
 #[test]
 fn test_zigbee_nwk_frame_device_announcement() {
     let frame = Frame {
-        frame_type: SecurableTagged::Secured(0, SecuredData {
-            key_identifier: KeyIdentifier::Network(0),
-            frame_counter: 0,
-            extended_source: Some(ExtendedAddress(0xd0cf5efffe1c6306)),
-            payload: vec![
-                0x6c, 0x41, 0xb1, 0x8d, 0x1c, 0xf1, 0x21, 0xc4, 0x53, 0xc8, 0xd9, 0xcf, 0xa5, 0xf2,
-                0xbc, 0x17, 0x9c, 0xfb, 0xee, 0x40, 0x03, 0x78, 0x23, 0x2d,
-            ],
-        }),
+        frame_type: SecurableTagged::Secured(
+            0,
+            SecuredData {
+                key_identifier: KeyIdentifier::Network(0),
+                frame_counter: 0,
+                extended_source: Some(ExtendedAddress(0xd0cf5efffe1c6306)),
+                payload: vec![
+                    0x6c, 0x41, 0xb1, 0x8d, 0x1c, 0xf1, 0x21, 0xc4, 0x53, 0xc8, 0xd9, 0xcf, 0xa5,
+                    0xf2, 0xbc, 0x17, 0x9c, 0xfb, 0xee, 0x40, 0x03, 0x78, 0x23, 0x2d,
+                ],
+            },
+        ),
         protocol_version: 2,
         destination: ShortAddress(0xFFFD),
         source: ShortAddress(0x558B),
