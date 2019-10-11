@@ -11,6 +11,7 @@ use aead::Aead;
 use bitfield::bitfield;
 use block_cipher_trait::BlockCipher;
 use crypto_mac::Mac;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::result::Result;
@@ -61,7 +62,7 @@ pub enum KeyIdentifier {
 
 pub struct KeyStore {
     data: Option<[u8; 16]>,
-    network: Option<[u8; 16]>,
+    network: HashMap<u8, [u8; 16]>,
     key_transport: Option<[u8; 16]>,
     key_load: Option<[u8; 16]>,
 }
@@ -200,9 +201,8 @@ impl Deserialize for SecuredData {
 fn generate_encryption_key(key_identifier: KeyIdentifier, store: &KeyStore) -> Option<[u8; 16]> {
     match key_identifier {
         KeyIdentifier::Data => store.data,
-        KeyIdentifier::Network(_) => {
-            // Not implemented yet
-            unimplemented!()
+        KeyIdentifier::Network(key_sequence_number) => {
+            store.network.get(&key_sequence_number).cloned()
         }
         KeyIdentifier::KeyTransport => {
             let mut mac: hmac::Hmac<mmohash::MMOHash<aes::Aes128, _>> =
@@ -417,7 +417,7 @@ impl SecuredData {
 fn test_decode_transport_key() {
     let keystore = KeyStore {
         data: None,
-        network: None,
+        network: HashMap::new(),
         key_transport: Some([
             0x5a, 0x69, 0x67, 0x42, 0x65, 0x65, 0x41, 0x6c, 0x6c, 0x69, 0x61, 0x6e, 0x63, 0x65,
             0x30, 0x39,
@@ -459,4 +459,54 @@ fn test_decode_transport_key() {
     .unwrap();
     let recrypted = recrypted.serialize().unwrap();
     assert_eq!(recrypted, secured_frame);
+}
+
+#[test]
+fn test_crypt_device_announcement() {
+    let keystore = KeyStore {
+        data: None,
+        network: [(
+            0,
+            [
+                0x41, 0x71, 0x61, 0x72, 0x61, 0x48, 0x75, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            ],
+        )]
+        .iter()
+        .cloned()
+        .collect(),
+        key_transport: Some([
+            0x5a, 0x69, 0x67, 0x42, 0x65, 0x65, 0x41, 0x6c, 0x6c, 0x69, 0x61, 0x6e, 0x63, 0x65,
+            0x30, 0x39,
+        ]),
+        key_load: None,
+    };
+    let ciphertext = SecuredData {
+        key_identifier: KeyIdentifier::Network(0),
+        frame_counter: 0,
+        extended_source: Some(ExtendedAddress(0xd0cf5efffe1c6306)),
+        payload: vec![
+            0x6c, 0x41, 0xb1, 0x8d, 0x1c, 0xf1, 0x21, 0xc4, 0x53, 0xc8, 0xd9, 0xcf, 0xa5, 0xf2,
+            0xbc, 0x17, 0x9c, 0xfb, 0xee, 0x40, 0x03, 0x78, 0x23, 0x2d,
+        ],
+    };
+    let header = vec![
+        0x08, 0x12, 0xfd, 0xff, 0x8b, 0x55, 0x1e, 0xfb, 0x06, 0x63, 0x1c, 0xfe, 0xff, 0x5e, 0xcf,
+        0xd0,
+    ];
+    let source_address = ExtendedAddress(0xd0cf5efffe1c6306);
+    let security_level = SecurityLevel {
+        encryption: true,
+        mig_len: MessageIntegrityCodeLen::MIC32,
+    };
+    let expected_plaintext = vec![
+        0x08, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00, 0x96, 0x81, 0x8b, 0x55, 0x06, 0x63, 0x1c, 0xfe,
+        0xff, 0x5e, 0xcf, 0xd0, 0x80,
+    ];
+    assert_eq!(
+        ciphertext
+            .decrypt(header.clone(), security_level, source_address, &keystore)
+            .unwrap(),
+        expected_plaintext
+    );
 }
