@@ -54,12 +54,12 @@ impl<T: Deserialize> DeserializeTagged for Securable<T> {
  * Secured data, but serialization depends on a tag that is stored unsecured.
  */
 #[derive(Eq, PartialEq, Debug)]
-pub enum SecurableTagged<T : SerializeTagged> {
+pub enum SecurableTagged<T: SerializeTagged> {
     Secured(T::TagType, SecuredData),
     Unsecured(T),
 }
 
-impl<T : Serialize + SerializeTagged> Serialize for SecurableTagged<T> {
+impl<T: Serialize + SerializeTagged> Serialize for SecurableTagged<T> {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
             SecurableTagged::Secured(_, data) => data.serialize_to(target),
@@ -68,7 +68,7 @@ impl<T : Serialize + SerializeTagged> Serialize for SecurableTagged<T> {
     }
 }
 
-impl<T : SerializeTagged> SerializeTagged for SecurableTagged<T> {
+impl<T: SerializeTagged> SerializeTagged for SecurableTagged<T> {
     type TagType = (bool, T::TagType);
 
     fn serialize_tag(&self) -> SerializeResult<Self::TagType> {
@@ -79,18 +79,17 @@ impl<T : SerializeTagged> SerializeTagged for SecurableTagged<T> {
     }
 }
 
-impl<T : DeserializeTagged> DeserializeTagged for SecurableTagged<T> {
+impl<T: DeserializeTagged> DeserializeTagged for SecurableTagged<T> {
     fn deserialize(tag: (bool, T::TagType), input: &[u8]) -> DeserializeResult<Self> {
         match tag.0 {
-            true =>  {
+            true => {
                 let (input, data) = SecuredData::deserialize(input)?;
                 Ok((input, SecurableTagged::Secured(tag.1, data)))
-            },
+            }
             false => {
                 let (input, data) = T::deserialize(tag.1, input)?;
                 Ok((input, SecurableTagged::Unsecured(data)))
             }
-            ,
         }
     }
 }
