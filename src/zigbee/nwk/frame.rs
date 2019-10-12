@@ -48,6 +48,7 @@ pub struct Frame {
 
 /*=== Bitfields for serializing & parsing ===*/
 bitfield! {
+    #[derive(Serialize, Deserialize)]
     pub struct FrameControl(u16);
     impl Debug;
     pub frame_type, set_frame_type: 1, 0;
@@ -60,7 +61,6 @@ bitfield! {
     pub source_ieee_address, set_source_ieee_address: 12, 12;
     pub reserved, set_reserved: 15, 13;
 }
-default_serialization_newtype!(FrameControl, u16);
 
 impl Serialize for Frame {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {

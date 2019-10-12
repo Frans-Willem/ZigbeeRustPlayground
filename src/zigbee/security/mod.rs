@@ -187,6 +187,7 @@ pub struct SecuredData {
 }
 
 bitfield! {
+    #[derive(Serialize, Deserialize)]
     pub struct SecurityControl(u8);
     impl Debug;
     /* Security level is always set to 0 on the air */
@@ -195,7 +196,6 @@ bitfield! {
     pub extended_nonce, set_extended_nonce: 5, 5;
     pub reserved, set_reserved: 7, 6;
 }
-default_serialization_newtype!(SecurityControl, u8);
 
 impl Serialize for SecuredData {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {

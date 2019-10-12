@@ -5,90 +5,26 @@ use crate::parse_serialize::{
 };
 use generic_array::{typenum::U16, GenericArray};
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct TrustCenterKeyDescriptor {
     key: GenericArray<u8, U16>,
     destination: ExtendedAddress,
     source: ExtendedAddress,
 }
-impl Serialize for TrustCenterKeyDescriptor {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        (self.key, self.destination, self.source).serialize_to(target)
-    }
-}
-impl Deserialize for TrustCenterKeyDescriptor {
-    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
-        let (input, (key, destination, source)) =
-            <(GenericArray<u8, U16>, ExtendedAddress, ExtendedAddress)>::deserialize(input)?;
-        Ok((
-            input,
-            TrustCenterKeyDescriptor {
-                key,
-                destination,
-                source,
-            },
-        ))
-    }
-}
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkKeyDescriptor {
     key: GenericArray<u8, U16>,
     sequence_number: u8,
     destination: ExtendedAddress,
     source: ExtendedAddress,
 }
-impl Serialize for NetworkKeyDescriptor {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        (
-            self.key,
-            self.sequence_number,
-            self.destination,
-            self.source,
-        )
-            .serialize_to(target)
-    }
-}
-impl Deserialize for NetworkKeyDescriptor {
-    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
-        let (input, (key, sequence_number, destination, source)) =
-            <(GenericArray<u8, U16>, u8, ExtendedAddress, ExtendedAddress)>::deserialize(input)?;
-        Ok((
-            input,
-            NetworkKeyDescriptor {
-                key,
-                sequence_number,
-                destination,
-                source,
-            },
-        ))
-    }
-}
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ApplicationKeyDescriptor {
     key: GenericArray<u8, U16>,
     partner: ExtendedAddress,
     initiator: bool,
-}
-impl Serialize for ApplicationKeyDescriptor {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        (self.key, self.partner, self.initiator as u8).serialize_to(target)
-    }
-}
-impl Deserialize for ApplicationKeyDescriptor {
-    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
-        let (input, (key, partner, initiator)) =
-            <(GenericArray<u8, U16>, ExtendedAddress, u8)>::deserialize(input)?;
-        Ok((
-            input,
-            ApplicationKeyDescriptor {
-                key,
-                partner,
-                initiator: initiator != 0,
-            },
-        ))
-    }
 }
 
 #[derive(Eq, PartialEq, Debug)]

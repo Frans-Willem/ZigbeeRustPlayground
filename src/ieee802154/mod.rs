@@ -1,8 +1,8 @@
 pub mod mac;
+use crate::parse_serialize::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShortAddress(pub u16);
-default_serialization_newtype!(ShortAddress, u16);
 
 impl ShortAddress {
     pub fn as_u16(&self) -> u16 {
@@ -15,9 +15,8 @@ impl ShortAddress {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ExtendedAddress(pub u64);
-default_serialization_newtype!(ExtendedAddress, u64);
 
 impl ExtendedAddress {
     pub fn as_u64(&self) -> u64 {
@@ -25,9 +24,8 @@ impl ExtendedAddress {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PANID(pub u16);
-default_serialization_newtype!(PANID, u16);
 
 impl PANID {
     pub fn as_u16(&self) -> u16 {

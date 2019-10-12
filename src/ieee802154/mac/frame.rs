@@ -158,6 +158,7 @@ impl Into<Option<PANID>> for AddressSpecification {
 
 /*=== Bitfields for serialization & parsing ===*/
 bitfield! {
+    #[derive(Serialize, Deserialize)]
     pub struct FrameControl(u16);
     impl Debug;
     pub frame_type, set_frame_type: 2, 0;
@@ -172,7 +173,6 @@ bitfield! {
     pub frame_version, set_frame_version: 13, 12;
     pub source_addressing_mode, set_source_addressing_mode: 15, 14;
 }
-default_serialization_newtype!(FrameControl, u16);
 
 #[test]
 fn test_frame_control_parsing() {
@@ -234,6 +234,7 @@ fn test_frame_control_serialize() {
 }
 
 bitfield! {
+    #[derive(Serialize, Deserialize)]
     struct SuperframeSpecification(u16);
     impl Debug;
     pub beacon_order, set_beacon_order: 3, 0;
@@ -244,9 +245,9 @@ bitfield! {
     pub pan_coordinator, set_pan_coordinator: 14, 14;
     pub association_permit, set_association_permit: 15, 15;
 }
-default_serialization_newtype!(SuperframeSpecification, u16);
 
 bitfield! {
+    #[derive(Serialize, Deserialize)]
     struct AssociationRequest(u8);
     impl Debug;
     pub alternate_pan_coordinator, set_alternate_pan_coordinator: 0, 0;
@@ -258,7 +259,6 @@ bitfield! {
     pub security_capability, set_security_capability: 6, 6;
     pub allocate_address, set_allocate_address: 7, 7;
 }
-default_serialization_newtype!(AssociationRequest, u8);
 
 /**
  * Not implementing Serialize & Deserialize, as these serializations take an extra parameter (PANID

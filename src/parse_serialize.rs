@@ -1,3 +1,4 @@
+pub use derives::{Deserialize, Serialize};
 use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
 use std::iter::FromIterator;
@@ -132,28 +133,6 @@ default_impl!(i64);
 default_impl!(i128);
 
 #[macro_export]
-macro_rules! default_serialization_newtype {
-    ($t:ident, $i:ident) => {
-        impl $crate::parse_serialize::Deserialize for $t {
-            fn deserialize(input: &[u8]) -> $crate::parse_serialize::DeserializeResult<$t> {
-                let (input, parsed) = $i::deserialize(input)?;
-                std::result::Result::Ok((input, $t(parsed)))
-            }
-        }
-        impl $crate::parse_serialize::Serialize for $t {
-            fn serialize_to(
-                &self,
-                target: &mut Vec<u8>,
-            ) -> $crate::parse_serialize::SerializeResult<()> {
-                match self {
-                    $t(inner) => inner.serialize_to(target),
-                }
-            }
-        }
-    };
-}
-
-#[macro_export]
 macro_rules! default_serialization_enum {
     ($t:ident, $i:ident) => {
         impl $crate::parse_serialize::Deserialize for $t {
@@ -177,6 +156,18 @@ macro_rules! default_serialization_enum {
             }
         }
     };
+}
+
+impl Serialize for bool {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        (*self as u8).serialize_to(target)
+    }
+}
+
+impl Deserialize for bool {
+    fn deserialize(input: &[u8]) -> DeserializeResult<bool> {
+        nom::combinator::map(u8::deserialize, |v: u8| v >= 0)(input)
+    }
 }
 
 impl<T: Serialize> Serialize for &T {

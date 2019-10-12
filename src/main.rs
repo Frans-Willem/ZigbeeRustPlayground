@@ -18,6 +18,7 @@ extern crate crypto_mac;
 extern crate generic_array;
 extern crate aead;
 extern crate ctr;
+extern crate derives;
 extern crate digest;
 extern crate hmac;
 extern crate nom;

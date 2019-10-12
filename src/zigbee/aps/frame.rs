@@ -23,6 +23,7 @@ impl Deserialize for Payload {
     }
 }
 
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ExtendedHeader {}
 
 pub enum EndpointOrGroup {
@@ -58,6 +59,7 @@ pub enum DeliveryMode {
 }
 
 bitfield! {
+    #[derive(Serialize)]
     pub struct FrameControl(u8);
     impl Debug;
     pub frame_type, set_frame_type: 1, 0;
@@ -67,7 +69,6 @@ bitfield! {
     pub ack_request, set_ack_request: 6, 6;
     pub extended_header_present, set_extended_header_present: 7, 7;
 }
-default_serialization_newtype!(FrameControl, u8);
 
 pub struct Frame {
     frame_type: FrameType,
