@@ -1,4 +1,4 @@
-pub use derives::{Deserialize, Serialize};
+pub use parse_serialize_derive::{Deserialize, Serialize};
 use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
 use std::iter::FromIterator;

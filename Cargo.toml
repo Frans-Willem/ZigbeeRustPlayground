@@ -26,4 +26,4 @@ subtle = "1.0.0"
 hmac = "0.7.1"
 digest = "0.8.1"
 nom = "5"
-derives = { path = "./derives" }
+parse-serialize-derive = { path = "./parse_serialize_derive" }
