@@ -22,6 +22,15 @@ pub enum Securable<T> {
     Unsecured(T),
 }
 
+impl<T> Securable<T> {
+    pub fn is_secured(&self) -> bool {
+        match self {
+            Securable::Secured(_) => true,
+            Securable::Unsecured(_) => false,
+        }
+    }
+}
+
 impl<T: Serialize> Serialize for Securable<T> {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
@@ -34,10 +43,7 @@ impl<T> SerializeTagged for Securable<T> {
     type TagType = bool;
 
     fn serialize_tag(&self) -> SerializeResult<bool> {
-        match self {
-            Securable::Secured(_) => Ok(true),
-            Securable::Unsecured(_) => Ok(false),
-        }
+        Ok(self.is_secured())
     }
 }
 
