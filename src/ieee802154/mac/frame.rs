@@ -30,8 +30,8 @@ pub enum PowerSource {
     Powered = 1, // AC powered
 }
 
-#[derive(Debug, PartialEq, TryFromPrimitive, Copy, Clone, Eq, Hash)]
-#[TryFromPrimitiveType = "u8"]
+#[derive(Debug, PartialEq, Copy, Clone, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum AssociationResponseStatus {
     AssociationSuccessful = 0,
     PANAtCapacity = 1,
@@ -39,7 +39,6 @@ pub enum AssociationResponseStatus {
     HoppingSequenceOffsetDuplication = 3,
     FastAssociationSuccessful = 0x80,
 }
-default_serialization_enum!(AssociationResponseStatus, u8);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Command {
@@ -374,6 +373,7 @@ impl Serialize for Command {
 }
 
 impl DeserializeTagged for FrameType {
+    type TagType = u16;
     fn deserialize(frame_type: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match frame_type {
             0 => {
@@ -423,10 +423,8 @@ impl SerializeTagged for FrameType {
             _ => Err(SerializeError::Unimplemented("FrameType not implemented")),
         }
     }
-}
 
-impl Serialize for FrameType {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
             FrameType::Beacon {
                 beacon_order,
@@ -590,7 +588,7 @@ impl Serialize for Frame {
         }
         self.destination.serialize_to(false, target)?;
         self.source.serialize_to(pan_id_compression, target)?;
-        self.frame_type.serialize_to(target)?;
+        self.frame_type.serialize_data_to(target)?;
         target.extend_from_slice(&self.payload);
         Ok(())
     }

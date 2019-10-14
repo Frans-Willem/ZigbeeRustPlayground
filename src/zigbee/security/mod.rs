@@ -31,23 +31,23 @@ impl<T> Securable<T> {
     }
 }
 
-impl<T: Serialize> Serialize for Securable<T> {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+impl<T : Serialize> SerializeTagged for Securable<T> {
+    type TagType = bool;
+
+    fn serialize_tag(&self) -> SerializeResult<bool> {
+        Ok(self.is_secured())
+    }
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         match self {
             Securable::Secured(data) => data.serialize_to(target),
             Securable::Unsecured(data) => data.serialize_to(target),
         }
     }
 }
-impl<T> SerializeTagged for Securable<T> {
-    type TagType = bool;
-
-    fn serialize_tag(&self) -> SerializeResult<bool> {
-        Ok(self.is_secured())
-    }
-}
 
 impl<T: Deserialize> DeserializeTagged for Securable<T> {
+    type TagType = bool;
+
     fn deserialize(tag: bool, input: &[u8]) -> DeserializeResult<Securable<T>> {
         match tag {
             true => nom::combinator::map(SecuredData::deserialize, Securable::Secured)(input),
@@ -60,22 +60,13 @@ impl<T: Deserialize> DeserializeTagged for Securable<T> {
  * Secured data, but serialization depends on a tag that is stored unsecured.
  */
 #[derive(Eq, PartialEq, Debug)]
-pub enum SecurableTagged<T: SerializeTagged> {
-    Secured(T::TagType, SecuredData),
+pub enum SecurableTagged<TagType : Copy, T> {
+    Secured(TagType, SecuredData),
     Unsecured(T),
 }
 
-impl<T: Serialize + SerializeTagged> Serialize for SecurableTagged<T> {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            SecurableTagged::Secured(_, data) => data.serialize_to(target),
-            SecurableTagged::Unsecured(data) => data.serialize_to(target),
-        }
-    }
-}
-
-impl<T: SerializeTagged> SerializeTagged for SecurableTagged<T> {
-    type TagType = (bool, T::TagType);
+impl<TagType, T> SerializeTagged for SecurableTagged<TagType, T> where TagType : Copy, T : SerializeTagged<TagType=TagType> {
+    type TagType = (bool, TagType);
 
     fn serialize_tag(&self) -> SerializeResult<Self::TagType> {
         Ok(match self {
@@ -83,10 +74,17 @@ impl<T: SerializeTagged> SerializeTagged for SecurableTagged<T> {
             SecurableTagged::Unsecured(data) => (false, data.serialize_tag()?),
         })
     }
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        match self {
+            SecurableTagged::Secured(_, data) => data.serialize_to(target),
+            SecurableTagged::Unsecured(data) => SerializeTagged::serialize_data_to(data, target),
+        }
+    }
 }
 
-impl<T: DeserializeTagged> DeserializeTagged for SecurableTagged<T> {
-    fn deserialize(tag: (bool, T::TagType), input: &[u8]) -> DeserializeResult<Self> {
+impl<TagType, T> DeserializeTagged for SecurableTagged<TagType, T> where TagType : Copy, T : DeserializeTagged<TagType=TagType> {
+    type TagType = (bool, TagType);
+    fn deserialize(tag: (bool, TagType), input: &[u8]) -> DeserializeResult<Self> {
         match tag.0 {
             true => {
                 let (input, data) = SecuredData::deserialize(input)?;
@@ -151,15 +149,6 @@ impl Into<u8> for SecurityLevel {
     }
 }
 
-impl Serialize for KeyIdentifier {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            KeyIdentifier::Network(key_sequence_number) => key_sequence_number.serialize_to(target),
-            _ => Ok(()),
-        }
-    }
-}
-
 impl SerializeTagged for KeyIdentifier {
     type TagType = u8;
     fn serialize_tag(&self) -> SerializeResult<u8> {
@@ -170,9 +159,16 @@ impl SerializeTagged for KeyIdentifier {
             KeyIdentifier::KeyLoad => 3,
         })
     }
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        match self {
+            KeyIdentifier::Network(key_sequence_number) => key_sequence_number.serialize_to(target),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl DeserializeTagged for KeyIdentifier {
+    type TagType = u8;
     fn deserialize(tag: u8, input: &[u8]) -> DeserializeResult<Self> {
         match tag {
             0 => Ok((input, KeyIdentifier::Data)),
@@ -215,7 +211,7 @@ impl Serialize for SecuredData {
         if let Some(source) = self.extended_source {
             source.serialize_to(target)?;
         }
-        self.key_identifier.serialize_to(target)?;
+        self.key_identifier.serialize_data_to(target)?;
         target.extend_from_slice(&self.payload);
         Ok(())
     }
@@ -305,7 +301,7 @@ fn generate_associated_data(
     if let Some(source) = extended_source {
         source.serialize_to(target)?;
     }
-    key_identifier.serialize_to(target)?;
+    key_identifier.serialize_data_to(target)?;
     Ok(())
 }
 

@@ -1,13 +1,11 @@
-use crate::ieee802154::{ExtendedAddress, ShortAddress};
 use crate::parse_serialize::{
-    Deserialize, DeserializeError, DeserializeResult, DeserializeTagged, Serialize, SerializeError,
+    Deserialize, DeserializeResult, Serialize,
     SerializeResult, SerializeTagged,
 };
 use crate::zigbee::aps::commands::*;
 use crate::zigbee::security::{KeyIdentifier, Securable, SecuredData};
 use crate::zigbee::{ClusterId, EndpointId, GroupId, ProfileId};
 use bitfield::bitfield;
-use std::convert::{TryFrom, TryInto};
 
 pub struct Payload(Vec<u8>);
 
@@ -26,31 +24,8 @@ impl Deserialize for Payload {
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ExtendedHeader {}
 
-pub enum EndpointOrGroup {
-    Endpoint(EndpointId),
-    Group(GroupId),
-}
-
-impl Serialize for EndpointOrGroup {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            EndpointOrGroup::Endpoint(e) => e.serialize_to(target),
-            EndpointOrGroup::Group(g) => g.serialize_to(target),
-        }
-    }
-}
-
-impl SerializeTagged for EndpointOrGroup {
-    type TagType = bool;
-    fn serialize_tag(&self) -> SerializeResult<Self::TagType> {
-        Ok(match self {
-            EndpointOrGroup::Endpoint(_) => false,
-            EndpointOrGroup::Group(_) => true,
-        })
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[repr(u8)]
 pub enum DeliveryMode {
     Unicast = 0,
     Reserved = 1,
@@ -139,7 +114,7 @@ impl Serialize for Frame {
                 if let Some(extended_header) = extended_header {
                     extended_header.serialize_to(target)?;
                 }
-                payload.serialize_to(target)
+                payload.serialize_data_to(target)
             }
             Frame::Command {
                 delivery_mode,
@@ -155,7 +130,7 @@ impl Serialize for Frame {
                 frame_control.set_extended_header_present(false as u8);
                 frame_control.serialize_to(target)?;
                 aps_counter.serialize_to(target)?;
-                payload.serialize_to(target)
+                payload.serialize_data_to(target)
             }
             _ => Ok(()),
         }

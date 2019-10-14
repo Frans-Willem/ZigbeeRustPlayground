@@ -32,7 +32,7 @@ pub struct SourceRoute {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Frame {
-    frame_type: SecurableTagged<FrameType>,
+    frame_type: SecurableTagged<u16, FrameType>,
     protocol_version: u8,
     destination: ShortAddress,
     source: ShortAddress,
@@ -95,7 +95,7 @@ impl Serialize for Frame {
         if let Some(source_route) = self.source_route.as_ref() {
             source_route.serialize_to(target)?;
         }
-        self.frame_type.serialize_to(target)
+        self.frame_type.serialize_data_to(target)
     }
 }
 impl Deserialize for Frame {
@@ -149,17 +149,6 @@ impl Deserialize for Frame {
     }
 }
 
-impl Serialize for FrameType {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            FrameType::Data(payload) => {
-                target.extend(payload);
-                Ok(())
-            }
-            _ => Err(SerializeError::Unimplemented("Not yet implemented")),
-        }
-    }
-}
 impl SerializeTagged for FrameType {
     type TagType = u16;
     fn serialize_tag(&self) -> SerializeResult<u16> {
@@ -169,8 +158,18 @@ impl SerializeTagged for FrameType {
             FrameType::InterPAN(_) => 3,
         })
     }
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        match self {
+            FrameType::Data(payload) => {
+                target.extend(payload);
+                Ok(())
+            }
+            _ => Err(SerializeError::Unimplemented("Not yet implemented")),
+        }
+    }
 }
 impl DeserializeTagged for FrameType {
+    type TagType = u16;
     fn deserialize(tag: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match tag {
             0 => nom::combinator::map(nom::combinator::rest, |rest: &[u8]| {

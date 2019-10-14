@@ -1,6 +1,7 @@
-pub use parse_serialize_derive::{Deserialize, Serialize};
 use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
+pub use parse_serialize_derive::{Deserialize, Serialize};
+use std::convert::{Into};
 use std::iter::FromIterator;
 
 #[derive(Debug)]
@@ -78,7 +79,8 @@ pub trait Deserialize: Sized {
     }
 }
 
-pub trait DeserializeTagged: SerializeTagged + Sized {
+pub trait DeserializeTagged: Sized {
+    type TagType;
     fn deserialize(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
 }
 
@@ -96,6 +98,7 @@ pub trait Serialize: Sized {
 pub trait SerializeTagged {
     type TagType: Copy;
     fn serialize_tag(&self) -> SerializeResult<Self::TagType>;
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()>;
 }
 
 /* Default implementations */
@@ -166,7 +169,7 @@ impl Serialize for bool {
 
 impl Deserialize for bool {
     fn deserialize(input: &[u8]) -> DeserializeResult<bool> {
-        nom::combinator::map(u8::deserialize, |v: u8| v >= 0)(input)
+        nom::combinator::map(u8::deserialize, |v: u8| v > 0)(input)
     }
 }
 
@@ -176,7 +179,6 @@ impl<T: Serialize> Serialize for &T {
     }
 }
 
-// TODO: Macro-ify deze
 impl<T1: Deserialize, T2: Deserialize> Deserialize for (T1, T2) {
     fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2)> {
         nom::sequence::tuple((T1::deserialize, T2::deserialize))(input)
@@ -207,6 +209,7 @@ impl<T1: Serialize, T2: Serialize> Serialize for (T1, T2) {
         Ok(())
     }
 }
+
 impl<T1: Serialize, T2: Serialize, T3: Serialize> Serialize for (T1, T2, T3) {
     fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
         self.0.serialize_to(target)?;
@@ -255,4 +258,14 @@ impl<T: Deserialize, N: ArrayLength<T>> Deserialize for GenericArray<T, N> {
             |vec: Vec<T>| GenericArray::from_iter(vec.into_iter()),
         )(input)
     }
+}
+
+pub trait FieldlessEnum: Sized {
+    type RepresentationType;
+    fn into(self) -> Self::RepresentationType;
+    fn try_from(value: Self::RepresentationType) -> Option<Self>;
+}
+
+pub trait EnumTagType {
+    type EnumTagType;
 }

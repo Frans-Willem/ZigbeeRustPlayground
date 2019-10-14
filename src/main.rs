@@ -18,10 +18,10 @@ extern crate crypto_mac;
 extern crate generic_array;
 extern crate aead;
 extern crate ctr;
-extern crate parse_serialize_derive;
 extern crate digest;
 extern crate hmac;
 extern crate nom;
+extern crate parse_serialize_derive;
 extern crate stream_cipher;
 extern crate subtle;
 

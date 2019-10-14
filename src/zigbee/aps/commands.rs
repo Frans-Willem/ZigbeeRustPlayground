@@ -1,7 +1,6 @@
 use crate::ieee802154::ExtendedAddress;
 use crate::parse_serialize::{
-    Deserialize, DeserializeError, DeserializeResult, DeserializeTagged, Serialize, SerializeError,
-    SerializeResult, SerializeTagged,
+    Deserialize, DeserializeError, DeserializeResult, Serialize,
 };
 use generic_array::{typenum::U16, GenericArray};
 
@@ -27,30 +26,23 @@ pub struct ApplicationKeyDescriptor {
     initiator: bool,
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Serialize)]
+#[enum_tag_type(u8)]
 pub enum KeyDescriptor {
-    TrustCenterMasterKey(TrustCenterKeyDescriptor), // 0
-    StandardNetworkKey(NetworkKeyDescriptor),       // 1
-    ApplicationMasterKey(ApplicationKeyDescriptor), // 2
-    ApplicationLinkKey(ApplicationKeyDescriptor),   // 3
-    UniqueTrustCenterLinkKey(TrustCenterKeyDescriptor), // 4
-    HighSecurityNetworkKey(NetworkKeyDescriptor),   // 5
-    Unknown(NetworkKeyDescriptor),                  // 6
-}
-
-impl Serialize for KeyDescriptor {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            KeyDescriptor::TrustCenterMasterKey(x) => (0 as u8, x).serialize_to(target),
-            KeyDescriptor::StandardNetworkKey(x) => (1 as u8, x).serialize_to(target),
-            KeyDescriptor::ApplicationMasterKey(x) => (2 as u8, x).serialize_to(target),
-            KeyDescriptor::ApplicationLinkKey(x) => (3 as u8, x).serialize_to(target),
-            KeyDescriptor::UniqueTrustCenterLinkKey(x) => (4 as u8, x).serialize_to(target),
-            KeyDescriptor::HighSecurityNetworkKey(x) => (5 as u8, x).serialize_to(target),
-            KeyDescriptor::Unknown(x) => (6 as u8, x).serialize_to(target),
-            _ => Err(SerializeError::Unimplemented("Not yet implemented")),
-        }
-    }
+    #[enum_tag(0)]
+    TrustCenterMasterKey(TrustCenterKeyDescriptor),
+    #[enum_tag(1)]
+    StandardNetworkKey(NetworkKeyDescriptor),
+    #[enum_tag(2)]
+    ApplicationMasterKey(ApplicationKeyDescriptor),
+    #[enum_tag(3)]
+    ApplicationLinkKey(ApplicationKeyDescriptor),
+    #[enum_tag(4)]
+    UniqueTrustCenterLinkKey(TrustCenterKeyDescriptor),
+    #[enum_tag(5)]
+    HighSecurityNetworkKey(NetworkKeyDescriptor),
+    #[enum_tag(7)]
+    Unknown(NetworkKeyDescriptor),
 }
 
 impl Deserialize for KeyDescriptor {
@@ -89,17 +81,11 @@ impl Deserialize for KeyDescriptor {
     }
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Serialize)]
+#[enum_tag_type(u8)]
 pub enum Command {
+    #[enum_tag(5)]
     TransportKey(KeyDescriptor),
-}
-
-impl Serialize for Command {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            Command::TransportKey(key_descriptor) => (5 as u8, key_descriptor).serialize_to(target),
-        }
-    }
 }
 
 impl Deserialize for Command {
