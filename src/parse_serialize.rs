@@ -155,30 +155,31 @@ default_impl!(i32);
 default_impl!(i64);
 default_impl!(i128);
 
-#[macro_export]
-macro_rules! default_serialization_enum {
-    ($t:ident, $i:ident) => {
-        impl $crate::parse_serialize::Deserialize for $t {
-            fn deserialize(input: &[u8]) -> $crate::parse_serialize::DeserializeResult<$t> {
-                let (input, parsed) = $i::deserialize(input)?;
-                let result = $t::try_from(parsed).map_err(|_| {
-                    $crate::nom::Err::Error($crate::parse_serialize::DeserializeError(
-                        input,
-                        SerializeError::UnexpectedData,
-                    ))
-                })?;
-                std::result::Result::Ok((input, result))
-            }
+impl<T> SerializeTagged for Option<T>
+where
+    T: Serialize,
+{
+    type TagType = bool;
+    fn serialize_tag(&self) -> SerializeResult<bool> {
+        Ok(self.is_some())
+    }
+    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        if let Some(value) = self {
+            value.serialize_to(target)
+        } else {
+            Ok(())
         }
-        impl $crate::parse_serialize::Serialize for $t {
-            fn serialize_to(
-                &self,
-                target: &mut Vec<u8>,
-            ) -> $crate::parse_serialize::SerializeResult<()> {
-                (*self as $i).serialize_to(target)
-            }
-        }
-    };
+    }
+}
+
+impl<T> DeserializeTagged for Option<T>
+where
+    T: Deserialize,
+{
+    type TagType = bool;
+    fn deserialize_data(tag: bool, input: &[u8]) -> DeserializeResult<Self> {
+        nom::combinator::cond(tag, T::deserialize)(input)
+    }
 }
 
 impl Serialize for bool {
