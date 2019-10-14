@@ -40,14 +40,14 @@ fn impl_serialize_macro(ast: &syn::DeriveInput) -> TokenStream {
 
 fn impl_serializetagged_macro(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
-        syn::Data::Enum(d) => impl_serializetagged_enum_macro(&ast.ident, &ast.attrs, d),
+        syn::Data::Enum(d) => impl_serializetagged_enum_macro(&ast.ident, &ast.generics, &ast.attrs, d),
         _ => panic!("derive(SerializeTagged) not implemented for this datatype"),
     }
 }
 
 fn impl_deserializetagged_macro(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
-        syn::Data::Enum(d) => impl_deserializetagged_enum_macro(&ast.ident, &ast.attrs, d),
+        syn::Data::Enum(d) => impl_deserializetagged_enum_macro(&ast.ident, &ast.generics, &ast.attrs, d),
         _ => panic!("derive(DeserializeTagged) not implemented for this datatype"),
     }
 }
@@ -233,6 +233,7 @@ fn impl_serialize_enum_macro(
 
 fn impl_serializetagged_enum_macro(
     name: &syn::Ident,
+    generics: &syn::Generics,
     attrs: &Vec<syn::Attribute>,
     data: &syn::DataEnum,
 ) -> TokenStream {
@@ -254,8 +255,12 @@ fn impl_serializetagged_enum_macro(
             }
         }
     });
+    let my_wheres = data.variants.iter().flat_map(|variant| {
+        variant.fields.iter().map(|field| &field.ty)
+    });
+    let existing_wheres = generics.where_clause.as_ref().map(|x| &x.predicates);
     quote! {
-        impl crate::parse_serialize::SerializeTagged for #name {
+        impl #generics crate::parse_serialize::SerializeTagged for #name #generics where #(#my_wheres : crate::parse_serialize::Serialize,)* #existing_wheres {
             type TagType = #repr_type;
             fn serialize_tag(&self) -> crate::parse_serialize::SerializeResult<#repr_type> {
                 match self {
@@ -339,6 +344,7 @@ fn impl_deserialize_enum_macro(
 
 fn impl_deserializetagged_enum_macro(
     name: &syn::Ident,
+    generics: &syn::Generics,
     attrs: &Vec<syn::Attribute>,
     data: &syn::DataEnum,
 ) -> TokenStream {
@@ -363,8 +369,12 @@ fn impl_deserializetagged_enum_macro(
             }
         }
     });
-    let ret = quote! {
-        impl crate::parse_serialize::DeserializeTagged for #name {
+    let my_wheres = data.variants.iter().flat_map(|variant| {
+        variant.fields.iter().map(|field| &field.ty)
+    });
+    let existing_wheres = generics.where_clause.as_ref().map(|x| &x.predicates);
+    quote! {
+        impl #generics crate::parse_serialize::DeserializeTagged for #name #generics where #(#my_wheres : crate::parse_serialize::Deserialize, )* #existing_wheres {
             type TagType = #repr_type;
             fn deserialize_data(discriminant: #repr_type, input: &[u8]) -> crate::parse_serialize::DeserializeResult<Self> {
                 match discriminant {
@@ -373,6 +383,5 @@ fn impl_deserializetagged_enum_macro(
                 }
             }
         }
-    };
-    ret
+    }
 }
