@@ -1,7 +1,7 @@
 use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
 pub use parse_serialize_derive::{Deserialize, Serialize};
-use std::convert::{Into};
+use std::convert::Into;
 use std::iter::FromIterator;
 
 #[derive(Debug)]
@@ -268,4 +268,65 @@ pub trait FieldlessEnum: Sized {
 
 pub trait EnumTagType {
     type EnumTagType;
+}
+
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+struct SimpleTupleStruct(u16, u16);
+
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+struct SimpleStruct {
+    a: u16,
+    b: u16,
+}
+
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[enum_tag_type(u8)]
+enum SimpleEnum {
+    #[enum_tag(1)]
+    UnitVariant,
+    #[enum_tag(2)]
+    UnitVariantEmpty(),
+    #[enum_tag(3)]
+    TupleVariant(u16, u16),
+    #[enum_tag(4)]
+    StructVariant { a: u16, b: u16 },
+}
+
+#[test]
+fn test_serialize_derive() {
+    let data = SimpleTupleStruct(1, 2);
+    let serialized = vec![1, 0, 2, 0];
+    assert_eq!(data.serialize().unwrap(), serialized);
+    assert_eq!(
+        SimpleTupleStruct::deserialize_complete(&serialized).unwrap(),
+        data
+    );
+
+    let data = SimpleStruct { a: 3, b: 4 };
+    let serialized = vec![3, 0, 4, 0];
+    assert_eq!(data.serialize().unwrap(), serialized);
+    assert_eq!(
+        SimpleStruct::deserialize_complete(&serialized).unwrap(),
+        data
+    );
+
+    let data = SimpleEnum::UnitVariant;
+    let serialized = vec![1];
+    assert_eq!(data.serialize().unwrap(), serialized);
+    assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+
+    let data = SimpleEnum::UnitVariantEmpty();
+    let serialized = vec![2];
+    assert_eq!(data.serialize().unwrap(), serialized);
+    assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+
+    let data = SimpleEnum::TupleVariant(5, 6);
+    let serialized = vec![3, 5, 0, 6, 0];
+    assert_eq!(data.serialize().unwrap(), serialized);
+    assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+
+    let data = SimpleEnum::StructVariant { a: 7, b: 8 };
+    let serialized = vec![4, 7, 0, 8, 0];
+    assert_eq!(data.serialize().unwrap(), serialized);
+    assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
 }
