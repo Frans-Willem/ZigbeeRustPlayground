@@ -1,6 +1,5 @@
 use crate::parse_serialize::{
-    Deserialize, DeserializeResult, Serialize,
-    SerializeResult, SerializeTagged,
+    Deserialize, DeserializeResult, Serialize, SerializeResult, SerializeTagged,
 };
 use crate::zigbee::aps::commands::*;
 use crate::zigbee::security::{KeyIdentifier, Securable, SecuredData};

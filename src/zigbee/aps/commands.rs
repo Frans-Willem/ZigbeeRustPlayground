@@ -1,7 +1,5 @@
 use crate::ieee802154::ExtendedAddress;
-use crate::parse_serialize::{
-    Deserialize, DeserializeError, DeserializeResult, Serialize,
-};
+use crate::parse_serialize::{Deserialize, DeserializeError, DeserializeResult, Serialize};
 use generic_array::{typenum::U16, GenericArray};
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]

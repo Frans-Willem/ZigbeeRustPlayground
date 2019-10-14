@@ -31,7 +31,7 @@ impl<T> Securable<T> {
     }
 }
 
-impl<T : Serialize> SerializeTagged for Securable<T> {
+impl<T: Serialize> SerializeTagged for Securable<T> {
     type TagType = bool;
 
     fn serialize_tag(&self) -> SerializeResult<bool> {
@@ -60,12 +60,16 @@ impl<T: Deserialize> DeserializeTagged for Securable<T> {
  * Secured data, but serialization depends on a tag that is stored unsecured.
  */
 #[derive(Eq, PartialEq, Debug)]
-pub enum SecurableTagged<TagType : Copy, T> {
+pub enum SecurableTagged<TagType: Copy, T> {
     Secured(TagType, SecuredData),
     Unsecured(T),
 }
 
-impl<TagType, T> SerializeTagged for SecurableTagged<TagType, T> where TagType : Copy, T : SerializeTagged<TagType=TagType> {
+impl<TagType, T> SerializeTagged for SecurableTagged<TagType, T>
+where
+    TagType: Copy,
+    T: SerializeTagged<TagType = TagType>,
+{
     type TagType = (bool, TagType);
 
     fn serialize_tag(&self) -> SerializeResult<Self::TagType> {
@@ -82,7 +86,11 @@ impl<TagType, T> SerializeTagged for SecurableTagged<TagType, T> where TagType :
     }
 }
 
-impl<TagType, T> DeserializeTagged for SecurableTagged<TagType, T> where TagType : Copy, T : DeserializeTagged<TagType=TagType> {
+impl<TagType, T> DeserializeTagged for SecurableTagged<TagType, T>
+where
+    TagType: Copy,
+    T: DeserializeTagged<TagType = TagType>,
+{
     type TagType = (bool, TagType);
     fn deserialize(tag: (bool, TagType), input: &[u8]) -> DeserializeResult<Self> {
         match tag.0 {
