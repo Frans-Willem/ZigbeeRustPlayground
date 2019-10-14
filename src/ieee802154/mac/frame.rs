@@ -374,7 +374,7 @@ impl Serialize for Command {
 
 impl DeserializeTagged for FrameType {
     type TagType = u16;
-    fn deserialize(frame_type: u16, input: &[u8]) -> DeserializeResult<FrameType> {
+    fn deserialize_data(frame_type: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match frame_type {
             0 => {
                 let (input, (superframe_spec, gts, pending_addresses)) =
@@ -483,7 +483,7 @@ impl Deserialize for Frame {
             source_pan_compression,
             input,
         )?;
-        let (input, frame_type) = FrameType::deserialize(fsf.frame_type(), input)?;
+        let (input, frame_type) = FrameType::deserialize_data(fsf.frame_type(), input)?;
         let (input, payload) = nom::combinator::rest(input)?;
         Ok((
             input,

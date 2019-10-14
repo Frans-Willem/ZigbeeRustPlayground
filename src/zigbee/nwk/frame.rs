@@ -130,7 +130,7 @@ impl Deserialize for Frame {
         let (input, source_route) =
             nom::combinator::cond(fsf.source_route() != 0, SourceRoute::deserialize)(input)?;
         let (input, frame_type) =
-            SecurableTagged::deserialize((fsf.security() != 0, fsf.frame_type()), input)?;
+            SecurableTagged::deserialize_data((fsf.security() != 0, fsf.frame_type()), input)?;
         Ok((
             input,
             Frame {
@@ -170,7 +170,7 @@ impl SerializeTagged for FrameType {
 }
 impl DeserializeTagged for FrameType {
     type TagType = u16;
-    fn deserialize(tag: u16, input: &[u8]) -> DeserializeResult<FrameType> {
+    fn deserialize_data(tag: u16, input: &[u8]) -> DeserializeResult<FrameType> {
         match tag {
             0 => nom::combinator::map(nom::combinator::rest, |rest: &[u8]| {
                 FrameType::Data(rest.to_vec())

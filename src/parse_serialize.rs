@@ -1,6 +1,6 @@
 use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
-pub use parse_serialize_derive::{Deserialize, Serialize};
+pub use parse_serialize_derive::{Deserialize, DeserializeTagged, Serialize, SerializeTagged};
 use std::convert::Into;
 use std::iter::FromIterator;
 
@@ -81,7 +81,21 @@ pub trait Deserialize: Sized {
 
 pub trait DeserializeTagged: Sized {
     type TagType;
-    fn deserialize(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
+    fn deserialize_data(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
+    fn deserialize_data_complete(tag: Self::TagType, input: &[u8]) -> SerializeResult<Self> {
+        match Self::deserialize_data(tag, input) {
+            Ok((remaining, result)) => {
+                if remaining.len() != 0 {
+                    Err(SerializeError::DataLeft)
+                } else {
+                    Ok(result)
+                }
+            }
+            Err(nom::Err::Incomplete(_)) => Err(SerializeError::InsufficientData),
+            Err(nom::Err::Error(e)) => Err(e.1),
+            Err(nom::Err::Failure(e)) => Err(e.1),
+        }
+    }
 }
 
 pub type SerializeResult<T> = std::result::Result<T, SerializeError>;
@@ -99,6 +113,12 @@ pub trait SerializeTagged {
     type TagType: Copy;
     fn serialize_tag(&self) -> SerializeResult<Self::TagType>;
     fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()>;
+
+    fn serialize_data(&self) -> SerializeResult<Vec<u8>> {
+        let mut result = vec![];
+        self.serialize_data_to(&mut result)?;
+        Ok(result)
+    }
 }
 
 /* Default implementations */
@@ -279,7 +299,7 @@ struct SimpleStruct {
     b: u16,
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Debug, Serialize, Deserialize, SerializeTagged, DeserializeTagged)]
 #[enum_tag_type(u8)]
 enum SimpleEnum {
     #[enum_tag(1)]
@@ -314,19 +334,43 @@ fn test_serialize_derive() {
     let serialized = vec![1];
     assert_eq!(data.serialize().unwrap(), serialized);
     assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+    assert_eq!(data.serialize_tag().unwrap(), 1);
+    assert_eq!(data.serialize_data().unwrap(), serialized[1..].to_vec());
+    assert_eq!(
+        SimpleEnum::deserialize_data_complete(1, &serialized[1..]).unwrap(),
+        data
+    );
 
     let data = SimpleEnum::UnitVariantEmpty();
     let serialized = vec![2];
     assert_eq!(data.serialize().unwrap(), serialized);
     assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+    assert_eq!(data.serialize_tag().unwrap(), 2);
+    assert_eq!(data.serialize_data().unwrap(), serialized[1..].to_vec());
+    assert_eq!(
+        SimpleEnum::deserialize_data_complete(2, &serialized[1..]).unwrap(),
+        data
+    );
 
     let data = SimpleEnum::TupleVariant(5, 6);
     let serialized = vec![3, 5, 0, 6, 0];
     assert_eq!(data.serialize().unwrap(), serialized);
     assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+    assert_eq!(data.serialize_tag().unwrap(), 3);
+    assert_eq!(data.serialize_data().unwrap(), serialized[1..].to_vec());
+    assert_eq!(
+        SimpleEnum::deserialize_data_complete(3, &serialized[1..]).unwrap(),
+        data
+    );
 
     let data = SimpleEnum::StructVariant { a: 7, b: 8 };
     let serialized = vec![4, 7, 0, 8, 0];
     assert_eq!(data.serialize().unwrap(), serialized);
     assert_eq!(SimpleEnum::deserialize_complete(&serialized).unwrap(), data);
+    assert_eq!(data.serialize_tag().unwrap(), 4);
+    assert_eq!(data.serialize_data().unwrap(), serialized[1..].to_vec());
+    assert_eq!(
+        SimpleEnum::deserialize_data_complete(4, &serialized[1..]).unwrap(),
+        data
+    );
 }

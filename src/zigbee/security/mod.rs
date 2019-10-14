@@ -48,7 +48,7 @@ impl<T: Serialize> SerializeTagged for Securable<T> {
 impl<T: Deserialize> DeserializeTagged for Securable<T> {
     type TagType = bool;
 
-    fn deserialize(tag: bool, input: &[u8]) -> DeserializeResult<Securable<T>> {
+    fn deserialize_data(tag: bool, input: &[u8]) -> DeserializeResult<Securable<T>> {
         match tag {
             true => nom::combinator::map(SecuredData::deserialize, Securable::Secured)(input),
             false => nom::combinator::map(T::deserialize, Securable::Unsecured)(input),
@@ -92,25 +92,30 @@ where
     T: DeserializeTagged<TagType = TagType>,
 {
     type TagType = (bool, TagType);
-    fn deserialize(tag: (bool, TagType), input: &[u8]) -> DeserializeResult<Self> {
+    fn deserialize_data(tag: (bool, TagType), input: &[u8]) -> DeserializeResult<Self> {
         match tag.0 {
             true => {
                 let (input, data) = SecuredData::deserialize(input)?;
                 Ok((input, SecurableTagged::Secured(tag.1, data)))
             }
             false => {
-                let (input, data) = T::deserialize(tag.1, input)?;
+                let (input, data) = T::deserialize_data(tag.1, input)?;
                 Ok((input, SecurableTagged::Unsecured(data)))
             }
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeTagged, DeserializeTagged)]
+#[enum_tag_type(u8)]
 pub enum KeyIdentifier {
+    #[enum_tag(0)]
     Data,
-    Network(u8), // = 1
+    #[enum_tag(1)]
+    Network(u8),
+    #[enum_tag(2)]
     KeyTransport,
+    #[enum_tag(3)]
     KeyLoad,
 }
 
@@ -153,37 +158,6 @@ impl Into<u8> for SecurityLevel {
             (self.mig_len as u8) | 4
         } else {
             (self.mig_len as u8)
-        }
-    }
-}
-
-impl SerializeTagged for KeyIdentifier {
-    type TagType = u8;
-    fn serialize_tag(&self) -> SerializeResult<u8> {
-        Ok(match self {
-            KeyIdentifier::Data => 0,
-            KeyIdentifier::Network(_) => 1,
-            KeyIdentifier::KeyTransport => 2,
-            KeyIdentifier::KeyLoad => 3,
-        })
-    }
-    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            KeyIdentifier::Network(key_sequence_number) => key_sequence_number.serialize_to(target),
-            _ => Ok(()),
-        }
-    }
-}
-
-impl DeserializeTagged for KeyIdentifier {
-    type TagType = u8;
-    fn deserialize(tag: u8, input: &[u8]) -> DeserializeResult<Self> {
-        match tag {
-            0 => Ok((input, KeyIdentifier::Data)),
-            1 => nom::combinator::map(u8::deserialize, KeyIdentifier::Network)(input),
-            2 => Ok((input, KeyIdentifier::KeyTransport)),
-            3 => Ok((input, KeyIdentifier::KeyLoad)),
-            _ => DeserializeError::unexpected_data(input).into(),
         }
     }
 }
@@ -235,7 +209,7 @@ impl Deserialize for SecuredData {
         let (input, frame_counter) = u32::deserialize(input)?;
         let (input, extended_source) =
             nom::combinator::cond(sc.extended_nonce() != 0, ExtendedAddress::deserialize)(input)?;
-        let (input, key_identifier) = KeyIdentifier::deserialize(sc.key_identifier(), input)?;
+        let (input, key_identifier) = KeyIdentifier::deserialize_data(sc.key_identifier(), input)?;
         let (input, payload) = nom::combinator::rest(input)?;
         Ok((
             input,
