@@ -100,7 +100,7 @@ impl Serialize for Frame {
                 frame_control.set_ack_format(0);
                 frame_control.set_security(payload.serialize_tag()? as u8);
                 frame_control.set_ack_request(*ack_request as u8);
-                frame_control.set_extended_header_present(extended_header.is_some() as u8);
+                frame_control.set_extended_header_present(extended_header.serialize_tag()? as u8);
                 frame_control.serialize_to(target)?;
                 match destination {
                     DataDestination::Unicast(e) => e.serialize_to(target)?,
@@ -110,9 +110,7 @@ impl Serialize for Frame {
                 cluster.serialize_to(target)?;
                 source.serialize_to(target)?;
                 aps_counter.serialize_to(target)?;
-                if let Some(extended_header) = extended_header {
-                    extended_header.serialize_to(target)?;
-                }
+                extended_header.serialize_data_to(target)?;
                 payload.serialize_data_to(target)
             }
             Frame::Command {

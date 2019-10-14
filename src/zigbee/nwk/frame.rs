@@ -74,9 +74,9 @@ impl Serialize for Frame {
         fsf.set_discover_route(self.discover_route as u16);
         fsf.set_multicast_flag(0); // TODO
         fsf.set_security(frame_type_tag.0 as u16);
-        fsf.set_source_route(self.source_route.is_some().into());
-        fsf.set_destination_ieee_address(self.destination_ext.is_some().into());
-        fsf.set_source_ieee_address(self.source_ext.is_some().into());
+        fsf.set_source_route(self.source_route.serialize_tag()?.into());
+        fsf.set_destination_ieee_address(self.destination_ext.serialize_tag()?.into());
+        fsf.set_source_ieee_address(self.source_ext.serialize_tag()?.into());
         fsf.set_reserved(0);
         (
             fsf,
@@ -86,15 +86,9 @@ impl Serialize for Frame {
             self.sequence_number,
         )
             .serialize_to(target)?;
-        if let Some(destination_ext) = self.destination_ext.as_ref() {
-            destination_ext.serialize_to(target)?;
-        }
-        if let Some(source_ext) = self.source_ext.as_ref() {
-            source_ext.serialize_to(target)?;
-        }
-        if let Some(source_route) = self.source_route.as_ref() {
-            source_route.serialize_to(target)?;
-        }
+        self.destination_ext.serialize_data_to(target)?;
+        self.source_ext.serialize_data_to(target)?;
+        self.source_route.serialize_data_to(target)?;
         self.frame_type.serialize_data_to(target)
     }
 }

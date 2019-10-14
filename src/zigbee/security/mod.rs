@@ -16,9 +16,12 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::result::Result;
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, SerializeTagged, DeserializeTagged)]
+#[enum_tag_type(bool)]
 pub enum Securable<T> {
+    #[enum_tag(true)]
     Secured(SecuredData),
+    #[enum_tag(false)]
     Unsecured(T),
 }
 
@@ -27,31 +30,6 @@ impl<T> Securable<T> {
         match self {
             Securable::Secured(_) => true,
             Securable::Unsecured(_) => false,
-        }
-    }
-}
-
-impl<T: Serialize> SerializeTagged for Securable<T> {
-    type TagType = bool;
-
-    fn serialize_tag(&self) -> SerializeResult<bool> {
-        Ok(self.is_secured())
-    }
-    fn serialize_data_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        match self {
-            Securable::Secured(data) => data.serialize_to(target),
-            Securable::Unsecured(data) => data.serialize_to(target),
-        }
-    }
-}
-
-impl<T: Deserialize> DeserializeTagged for Securable<T> {
-    type TagType = bool;
-
-    fn deserialize_data(tag: bool, input: &[u8]) -> DeserializeResult<Securable<T>> {
-        match tag {
-            true => nom::combinator::map(SecuredData::deserialize, Securable::Secured)(input),
-            false => nom::combinator::map(T::deserialize, Securable::Unsecured)(input),
         }
     }
 }
@@ -186,13 +164,11 @@ impl Serialize for SecuredData {
         let mut sc = SecurityControl(0);
         sc.set_security_level(0); // Always set as 0 on air.
         sc.set_key_identifier(self.key_identifier.serialize_tag()?);
-        sc.set_extended_nonce(self.extended_source.is_some() as u8);
+        sc.set_extended_nonce(self.extended_source.serialize_tag()? as u8);
         sc.set_reserved(0);
         sc.serialize_to(target)?;
         self.frame_counter.serialize_to(target)?;
-        if let Some(source) = self.extended_source {
-            source.serialize_to(target)?;
-        }
+        self.extended_source.serialize_data_to(target)?;
         self.key_identifier.serialize_data_to(target)?;
         target.extend_from_slice(&self.payload);
         Ok(())
@@ -208,7 +184,7 @@ impl Deserialize for SecuredData {
         }
         let (input, frame_counter) = u32::deserialize(input)?;
         let (input, extended_source) =
-            nom::combinator::cond(sc.extended_nonce() != 0, ExtendedAddress::deserialize)(input)?;
+            Option::<ExtendedAddress>::deserialize_data(sc.extended_nonce() != 0, input)?;
         let (input, key_identifier) = KeyIdentifier::deserialize_data(sc.key_identifier(), input)?;
         let (input, payload) = nom::combinator::rest(input)?;
         Ok((
@@ -276,13 +252,11 @@ fn generate_associated_data(
     let mut sc = SecurityControl(0);
     sc.set_security_level(security_level.into());
     sc.set_key_identifier(key_identifier.serialize_tag()?);
-    sc.set_extended_nonce(extended_source.is_some() as u8);
+    sc.set_extended_nonce(extended_source.serialize_tag()? as u8);
     sc.set_reserved(0);
     sc.serialize_to(target)?;
     frame_counter.serialize_to(target)?;
-    if let Some(source) = extended_source {
-        source.serialize_to(target)?;
-    }
+    extended_source.serialize_data_to(target)?;
     key_identifier.serialize_data_to(target)?;
     Ok(())
 }
