@@ -119,7 +119,11 @@ fn main() {
     let rt = Runtime::new().unwrap();
     let mut spawner: Box<dyn CloneSpawn> = Box::new(MySpawner(rt.executor()));
     let settings = tokio_serial::SerialPortSettings::default();
-    let port = tokio_serial::Serial::from_path("/dev/ttyACM0", &settings).unwrap();
+    let port = tokio_serial::Serial::from_path(
+        "/dev/serial/by-id/usb-Texas_Instruments_CC2531_USB_Dongle_00124B000E896815-if00",
+        &settings,
+    )
+    .unwrap();
     let (output_sink, output_stream) = radio_bridge::serial_protocol::Codec::new()
         .framed(port)
         .split();
