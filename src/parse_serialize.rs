@@ -155,6 +155,19 @@ default_impl!(i32);
 default_impl!(i64);
 default_impl!(i128);
 
+impl Serialize for Vec<u8> {
+    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
+        target.extend(self);
+        Ok(())
+    }
+}
+
+impl Deserialize for Vec<u8> {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
+        nom::combinator::map(nom::combinator::rest, |rest: &[u8]| rest.to_vec())(input)
+    }
+}
+
 impl<T> SerializeTagged for Option<T>
 where
     T: Serialize,
