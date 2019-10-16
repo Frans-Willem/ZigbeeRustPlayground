@@ -1,3 +1,4 @@
+use crate::ieee802154::mac::commands::*;
 use crate::ieee802154::mac::frame::*;
 use crate::ieee802154::mac::mru_address_set::{MRUAddressSet, MRUAddressSetAction};
 use crate::ieee802154::mac::queue::{Queue, QueueError, QueueEvent};
@@ -123,10 +124,10 @@ impl Service {
                 self.set_pending_data(&frame.source, pending_frames);
                 None
             }
-            FrameType::Command(Command::AssociationRequest {
+            FrameType::Command(Command::AssociationRequest(CommandAssociationRequest {
                 receive_on_when_idle,
                 ..
-            }) => {
+            })) => {
                 if let AddressSpecification::Extended(_pan_id, ext_source) = frame.source {
                     // TODO: Check if this was meant for us...
                     Some(Event::AssociationRequest {
@@ -188,15 +189,17 @@ impl Service {
             sequence_number: self.fresh_sequence_number().into(),
             destination: AddressSpecification::None,
             source: (self.pan_id.clone(), self.short_address.clone()).into(),
-            frame_type: FrameType::Beacon {
+            frame_type: FrameType::Beacon(Beacon {
                 beacon_order: 15,
                 superframe_order: 15,
                 final_cap_slot: 15,
                 battery_life_extension: false,
                 pan_coordinator: true,
                 association_permit: true,
-            },
-            payload: payload,
+                pending_short_addresses: vec![],
+                pending_long_addresses: vec![],
+                payload,
+            }),
         };
         self.send_frame_noqueue(beacon)
     }
@@ -303,11 +306,12 @@ impl Service {
                 sequence_number: self.fresh_sequence_number().into(),
                 destination: (self.pan_id, extended_address.clone()).into(),
                 source: (self.pan_id, self.extended_address).into(),
-                frame_type: FrameType::Command(Command::AssociationResponse {
-                    short_address: short_address,
-                    status: AssociationResponseStatus::AssociationSuccessful,
-                }),
-                payload: vec![],
+                frame_type: FrameType::Command(Command::AssociationResponse(
+                    CommandAssociationResponse {
+                        short_address: short_address,
+                        status: AssociationResponseStatus::AssociationSuccessful,
+                    },
+                )),
             };
             Box::new(self.send_frame_queued(frame))
         } else {
@@ -315,6 +319,30 @@ impl Service {
                 as Box<dyn Future<Output = Result<(), Error>> + Send + Unpin>
         }
     }
+
+    /*
+    pub fn send_data(
+        &mut self,
+        extended_address: ExtendedAddress,
+        payload: Vec<u8>) impl Future<Output = Result<(), Error>> {
+        if let Some(short_address) = self.associations.get_by_right(&extended_address) {
+            let short_address = short_address.clone();
+            let frame = Frame {
+                frame_pending: false,
+                acknowledge_request: true,
+                sequence_number: self.fresh_sequence_number().into(),
+                destination: (self.pan_id, short_address.clone()).into(),
+                source: (self.pan_id, ShortAddress(0)).into(),
+                frame_type: FrameType::Data(payload)
+
+
+            }
+        } else {
+            Box::new(futures::future::err(Error::NodeNotAssociated))
+                as Box<dyn Future<Output = Result<(), Error>> + Send + Unpin>
+        }
+    }
+    */
 }
 
 impl Stream for Service {
