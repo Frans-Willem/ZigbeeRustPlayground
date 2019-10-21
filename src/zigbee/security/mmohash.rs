@@ -2,7 +2,7 @@ use aes::Aes128;
 use block_cipher_trait::BlockCipher;
 use crypto_mac::Mac;
 use digest::{FixedOutput, Input};
-use generic_array::{sequence::GenericSequence, ArrayLength, GenericArray};
+use generic_array::{arr, arr_impl, sequence::GenericSequence, ArrayLength, GenericArray};
 use hmac::Hmac;
 use std::marker::PhantomData;
 

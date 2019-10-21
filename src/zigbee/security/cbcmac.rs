@@ -1,7 +1,7 @@
 use aes::Aes128;
 use block_cipher_trait::BlockCipher;
 use crypto_mac::{Mac, MacResult};
-use generic_array::{arr, sequence::GenericSequence, GenericArray};
+use generic_array::{arr, arr_impl, sequence::GenericSequence, GenericArray};
 /**
  * Note: an attempt to implement using block_modes::Cbc got overly complex,
  * as Cbc does not implement clone. Thus I've manually implemented the Cbc steps.

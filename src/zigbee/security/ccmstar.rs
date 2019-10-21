@@ -7,7 +7,7 @@ use bytes::BufMut;
 use crypto_mac::{Mac, MacResult};
 use ctr::Ctr128;
 use generic_array::typenum::{Unsigned, U16};
-use generic_array::{arr, sequence::GenericSequence, ArrayLength, GenericArray};
+use generic_array::{arr, arr_impl, sequence::GenericSequence, ArrayLength, GenericArray};
 use stream_cipher::SyncStreamCipher;
 use subtle::ConstantTimeEq;
 

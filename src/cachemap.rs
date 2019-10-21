@@ -2,6 +2,7 @@ use crate::delayqueue::DelayQueue;
 use crate::delayqueue::Error as DelayQueueError;
 use crate::delayqueue::Key as DelayQueueKey;
 use crate::CloneSpawn;
+use futures::ready;
 use futures::task::{Context, Poll, SpawnExt};
 use futures::{Future, FutureExt, Stream};
 use std::collections::HashMap;

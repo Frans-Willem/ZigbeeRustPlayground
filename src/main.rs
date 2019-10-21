@@ -6,19 +6,18 @@ extern crate tokio_serial;
 #[macro_use]
 extern crate enum_tryfrom_derive;
 extern crate enum_tryfrom;
-#[macro_use]
-extern crate futures;
+//#[macro_use]
+extern crate aead;
 extern crate aes;
 extern crate bimap;
 extern crate block_cipher_trait;
 extern crate block_modes;
 extern crate block_padding;
 extern crate crypto_mac;
-#[macro_use]
-extern crate generic_array;
-extern crate aead;
 extern crate ctr;
 extern crate digest;
+extern crate futures;
+extern crate generic_array;
 extern crate hmac;
 extern crate nom;
 extern crate parse_serialize_derive;
@@ -34,8 +33,6 @@ mod ieee802154;
 mod radio_bridge;
 mod saved_waker;
 mod zigbee;
-
-use futures::compat::*;
 
 use futures::task::{Spawn, SpawnExt};
 use futures::{FutureExt, StreamExt, TryFutureExt};
@@ -103,7 +100,7 @@ impl Spawn for MySpawner {
         &mut self,
         fut: futures::future::FutureObj<'static, ()>,
     ) -> Result<(), futures::task::SpawnError> {
-        let fut = fut.unit_error().boxed().compat();
+        //let fut = fut.unit_error().boxed().compat();
         self.0.spawn(fut);
         Ok(())
     }
@@ -128,8 +125,8 @@ fn main() {
         .framed(port)
         .split();
 
-    let output_sink = Box::new(output_sink.sink_compat());
-    let output_stream = Box::new(output_stream.compat());
+    let output_sink = Box::new(output_sink);
+    let output_stream = Box::new(output_stream);
     let (service, incoming_packets) =
         radio_bridge::service::RadioBridgeService::new(output_sink, output_stream, &mut spawner);
     let service = MACService::new(
@@ -147,5 +144,5 @@ fn main() {
     let service = service.then(move |macservice| main_loop(service_spawner, macservice.unwrap()));
     spawner.spawn(service).unwrap();
 
-    rt.shutdown_on_idle().wait().unwrap();
+    rt.shutdown_on_idle();
 }

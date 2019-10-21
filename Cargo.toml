@@ -5,10 +5,10 @@ authors = ["Frans-Willem Hardijzer <fw@hardijzer.nl>"]
 edition = "2018"
 
 [dependencies]
-tokio-serial = "3.2"
-tokio = "0.1"
+tokio-serial = "4.3.3-tokio-0.2.0-alpha.1"
+tokio = "0.2.0-alpha.6"
 bytes = "0.4"
-futures-preview = {version = "0.3.0-alpha.15", features=["compat"]}
+futures-preview = {version = "0.3.0-alpha.19", features=["async-await"]}
 bitfield = "0.13"
 enum-tryfrom = "0.2"
 enum-tryfrom-derive = "0.2"

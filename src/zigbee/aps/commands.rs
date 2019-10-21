@@ -1,6 +1,6 @@
 use crate::ieee802154::ExtendedAddress;
 use crate::parse_serialize::{Deserialize, DeserializeError, DeserializeResult, Serialize};
-use generic_array::{typenum::U16, GenericArray};
+use generic_array::{arr, arr_impl, typenum::U16, GenericArray};
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct TrustCenterKeyDescriptor {
