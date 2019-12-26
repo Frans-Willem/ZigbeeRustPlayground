@@ -1,11 +1,14 @@
+use cookie_factory::SerializeFn;
 use futures::prelude::*;
 use futures::ready;
 use pin_project::pin_project;
 use std::convert::TryInto;
+use std::io::Write;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 static RADIO_MAGIC_PREFIX: &[u8] = b"ZPB";
+
 #[derive(Debug)]
 pub struct RawRadioMessage {
     pub command_id: u8,
@@ -13,21 +16,47 @@ pub struct RawRadioMessage {
     pub data: Vec<u8>,
 }
 
+pub fn gen_raw_radio_message<'a, W: Write + 'a>(
+    msg: &'a RawRadioMessage,
+) -> impl SerializeFn<W> + 'a {
+    let len = if msg.data.len() > u16::max_value() as usize {
+        u16::max_value()
+    } else {
+        msg.data.len() as u16
+    };
+    cookie_factory::sequence::tuple((
+        cookie_factory::combinator::slice(RADIO_MAGIC_PREFIX),
+        cookie_factory::bytes::be_u8(msg.command_id),
+        cookie_factory::bytes::be_u16(msg.request_id),
+        cookie_factory::bytes::be_u16(len),
+        cookie_factory::combinator::slice(&msg.data[0..len as usize]),
+    ))
+}
+
 impl Into<Vec<u8>> for RawRadioMessage {
     fn into(self) -> Vec<u8> {
         let mut res = Vec::new();
-        res.extend_from_slice(RADIO_MAGIC_PREFIX);
-        res.push(self.command_id);
-        res.extend_from_slice(&self.request_id.to_be_bytes());
-        let length: u16 = if self.data.len() > u16::max_value() as usize {
-            u16::max_value()
-        } else {
-            self.data.len() as u16
-        };
-        res.extend_from_slice(&length.to_be_bytes());
-        res.extend_from_slice(&self.data[0..length as usize]);
+        cookie_factory::gen(gen_raw_radio_message(&self), &mut res);
         res
     }
+}
+
+pub fn parse_raw_radio_message(input: &[u8]) -> nom::IResult<&[u8], RawRadioMessage> {
+    let (input, (_, command_id, request_id, data_len)) = nom::sequence::tuple((
+        nom::bytes::streaming::tag(RADIO_MAGIC_PREFIX),
+        nom::number::streaming::be_u8,
+        nom::number::streaming::be_u16,
+        nom::number::streaming::be_u16,
+    ))(input)?;
+    let (input, data) = nom::bytes::streaming::take(data_len as usize)(input)?;
+    Ok((
+        input,
+        RawRadioMessage {
+            command_id,
+            request_id,
+            data: data.into(),
+        },
+    ))
 }
 
 #[pin_project]
@@ -69,7 +98,6 @@ impl<T: AsyncWrite> Sink<RawRadioMessage> for RawRadioSink<T> {
     }
 
     fn start_send(self: Pin<&mut Self>, item: RawRadioMessage) -> Result<(), Self::Error> {
-        println!("Start send?");
         let this = self.project();
         this.buffer.append(&mut item.into());
         Ok(())
@@ -121,59 +149,31 @@ impl<T: AsyncRead> RawRadioStream<T> {
 }
 
 fn pop_raw_message(buffer: &mut [u8]) -> (usize, Option<RawRadioMessage>) {
-println!("pop_raw_message: {:?}", buffer);
+    // Find prefix, if found, remove all before
+    // If not found, only keep enough bytes in the buffer so we don't miss the tag next time.
     if buffer.len() < RADIO_MAGIC_PREFIX.len() {
-println!("Too short");
         return (buffer.len(), None);
     }
-    // Find prefix, if found, remove all before
-    // If not found, only keep last x characters in buffer.
     let buffer = match find_subsequence(buffer, RADIO_MAGIC_PREFIX) {
         None => {
-						println!("No prefix found");
             buffer.rotate_right(RADIO_MAGIC_PREFIX.len());
             return (RADIO_MAGIC_PREFIX.len(), None);
         }
         Some(index) => {
-						println!("Prefix found at {}", index);
             buffer.rotate_left(index);
             let new_len = buffer.len() - index;
             &mut buffer[0..new_len]
         }
     };
-		println!("Buffer now: {:?}", buffer);
-    if buffer.len() < RADIO_MAGIC_PREFIX.len() + 1 + 2 + 2 {
-				println!("Too short");
-        return (buffer.len(), None);
+    match parse_raw_radio_message(buffer) {
+        Ok((remaining, message)) => {
+            let remaining_len = remaining.len();
+            buffer.rotate_right(remaining_len);
+            (remaining_len, Some(message))
+        }
+        Err(nom::Err::Incomplete(_)) => (buffer.len(), None),
+        Err(e) => panic!("{:?}", e),
     }
-    let command_id = buffer[RADIO_MAGIC_PREFIX.len()];
-    let request_id = u16::from_be_bytes(
-        buffer[RADIO_MAGIC_PREFIX.len() + 1..RADIO_MAGIC_PREFIX.len() + 3]
-            .try_into()
-            .unwrap(),
-    );
-    let data_length = u16::from_be_bytes(
-        buffer[RADIO_MAGIC_PREFIX.len() + 3..RADIO_MAGIC_PREFIX.len() + 5]
-            .try_into()
-            .unwrap(),
-    ) as usize;
-    let message_end = RADIO_MAGIC_PREFIX.len() + 1 + 2 + 2 + data_length;
-		println!("Decoded: {} {} {} {}", command_id, request_id, data_length, message_end);
-    if buffer.len() < message_end {
-println!("Too short");
-        return (buffer.len(), None);
-    }
-    let data: Vec<u8> = buffer[RADIO_MAGIC_PREFIX.len() + 5..message_end].into();
-    buffer.rotate_left(message_end);
-		println!("New buffer {:?}", buffer);
-    (
-        buffer.len() - message_end,
-        Some(RawRadioMessage {
-            command_id,
-            request_id,
-            data,
-        }),
-    )
 }
 
 impl<T: AsyncRead> Stream for RawRadioStream<T> {
@@ -191,12 +191,10 @@ impl<T: AsyncRead> Stream for RawRadioStream<T> {
             if target_slice.len() == 0 {
                 return Poll::Ready(None);
             }
-println!("Poll_read {}", target_slice.len());
             match ready!(this.source.as_mut().poll_read(cx, target_slice)) {
                 Ok(read) => {
-println!("Read {} bytes", read);
-*this.buffer_filled += read;
-},
+                    *this.buffer_filled += read;
+                }
                 Err(e) => return Poll::Ready(None),
             }
         }
