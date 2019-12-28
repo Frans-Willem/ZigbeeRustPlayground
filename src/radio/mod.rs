@@ -1,202 +1,199 @@
-use cookie_factory::SerializeFn;
-use futures::prelude::*;
-use futures::ready;
-use pin_project::pin_project;
+pub mod raw;
+use crate::radio::raw::{
+    RawRadioCommand, RawRadioMessage, RawRadioParam, RawRadioSink, RawRadioStream,
+};
+use crate::tokenmap::Token;
+use async_std::sync::Mutex;
+use futures::channel::mpsc;
+use futures::io::{AsyncRead, AsyncWrite};
+use futures::sink::{Sink, SinkExt};
+use futures::stream::{Stream, StreamExt};
+use futures::task::{Spawn, SpawnExt};
+use std::collections::HashMap;
 use std::convert::TryInto;
-use std::io::Write;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-static RADIO_MAGIC_PREFIX: &[u8] = b"ZPB";
+use std::marker::Unpin;
+use std::ops::{Deref, DerefMut};
 
 #[derive(Debug)]
-pub struct RawRadioMessage {
-    pub command_id: u8,
-    pub request_id: u16,
-    pub data: Vec<u8>,
+pub enum RadioRequest {
+	SetParam16(Option<Token>, RawRadioParam, u16),
+	SetParam64(Option<Token>, RawRadioParam, u64),
 }
 
-pub fn gen_raw_radio_message<'a, W: Write + 'a>(
-    msg: &'a RawRadioMessage,
-) -> impl SerializeFn<W> + 'a {
-    let len = if msg.data.len() > u16::max_value() as usize {
-        u16::max_value()
+#[derive(Debug)]
+pub enum RadioResponse {
+	SetParam16(Option<Token>, RawRadioParam, Result<u16, RadioError>),
+	SetParam64(Option<Token>, RawRadioParam, Result<u64, RadioError>),
+	OnPacket(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub struct RadioPacket {
+    data: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum RadioError {
+    RawError(Vec<u8>),
+    UnexpectedResponse,
+}
+
+#[derive(Debug)]
+pub enum RadioIncoming {
+    Response(Token, Result<RadioResponse, RadioError>),
+    Packet(RadioPacket),
+}
+
+type RadioResponseParser = fn(Vec<u8>) -> Result<RadioResponse, RadioError>;
+
+fn parse_max_power_response(data: Vec<u8>) -> Result<RadioResponse, RadioError> {
+    if data.len() == 2 {
+        Ok(RadioResponse::MaxTxPower(u16::from_be_bytes(
+            data.deref().try_into().unwrap(),
+        )))
     } else {
-        msg.data.len() as u16
-    };
-    cookie_factory::sequence::tuple((
-        cookie_factory::combinator::slice(RADIO_MAGIC_PREFIX),
-        cookie_factory::bytes::be_u8(msg.command_id),
-        cookie_factory::bytes::be_u16(msg.request_id),
-        cookie_factory::bytes::be_u16(len),
-        cookie_factory::combinator::slice(&msg.data[0..len as usize]),
-    ))
-}
-
-impl Into<Vec<u8>> for RawRadioMessage {
-    fn into(self) -> Vec<u8> {
-        let mut res = Vec::new();
-        cookie_factory::gen(gen_raw_radio_message(&self), &mut res);
-        res
+        println!("Unexpected: {:?}", data);
+        Err(RadioError::UnexpectedResponse)
     }
 }
 
-pub fn parse_raw_radio_message(input: &[u8]) -> nom::IResult<&[u8], RawRadioMessage> {
-    let (input, (_, command_id, request_id, data_len)) = nom::sequence::tuple((
-        nom::bytes::streaming::tag(RADIO_MAGIC_PREFIX),
-        nom::number::streaming::be_u8,
-        nom::number::streaming::be_u16,
-        nom::number::streaming::be_u16,
-    ))(input)?;
-    let (input, data) = nom::bytes::streaming::take(data_len as usize)(input)?;
-    Ok((
-        input,
-        RawRadioMessage {
+impl RadioRequest {
+    fn response_parser(&self) -> RadioResponseParser {
+        match self {
+            RadioRequest::GetMaxTxPower => parse_max_power_response,
+        }
+    }
+    fn to_raw(self, request_id: u16) -> RawRadioMessage {
+        match self {
+            RadioRequest::GetMaxTxPower => RawRadioMessage {
+                command_id: RawRadioCommand::GetValue,
+                request_id,
+                data: (RawRadioParam::TxPowerMax as u16)
+                    .to_be_bytes()
+                    .as_ref()
+                    .into(),
+            },
+        }
+    }
+}
+
+async fn radio_request_task<
+    W: AsyncWrite + Unpin,
+    S: Stream<Item = (Token, RadioRequest)> + Unpin,
+>(
+    port: W,
+    mut requests: S,
+    tokenmap: &Mutex<HashMap<u16, (Token, RadioResponseParser)>>,
+) {
+    let mut port = RawRadioSink::new(port);
+    let mut next_request_id: u16 = 0;
+    loop {
+        println!("Checking for requests");
+        if let Some((token, request)) = requests.next().await {
+            let request_id = {
+                let mut tokenmap = tokenmap.lock().await;
+                while tokenmap.contains_key(&next_request_id) {
+                    next_request_id += 1;
+                }
+                let request_id = next_request_id;
+                next_request_id += 1;
+                tokenmap
+                    .deref_mut()
+                    .insert(request_id, (token, request.response_parser()));
+                request_id
+            };
+            println!("Sending request with request id {}", request_id);
+            let request = request.to_raw(request_id);
+            println!("Request: {:?}", request);
+            if let Err(e) = port.send(request).await {
+                println!("Unable to send :/");
+            }
+        } else {
+            println!("Requests dried up, stopping radio service");
+            break;
+        }
+    }
+}
+
+async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioIncoming> + Unpin>(
+    port: R,
+    mut responses: S,
+    tokenmap: &Mutex<HashMap<u16, (Token, RadioResponseParser)>>,
+) {
+    let mut port = RawRadioStream::new(port);
+    loop {
+        println!("Reading radio message");
+        let RawRadioMessage {
             command_id,
             request_id,
-            data: data.into(),
-        },
-    ))
-}
-
-#[pin_project]
-pub struct RawRadioSink<T: AsyncWrite> {
-    #[pin]
-    target: T,
-    buffer: Vec<u8>,
-    written: usize,
-}
-
-impl<T: AsyncWrite> RawRadioSink<T> {
-    pub fn new(target: T) -> RawRadioSink<T> {
-        RawRadioSink {
-            target,
-            buffer: Vec::new(),
-            written: 0,
-        }
-    }
-}
-
-impl<T: AsyncWrite> Sink<RawRadioMessage> for RawRadioSink<T> {
-    type Error = async_std::io::Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        let mut this = self.project();
-        while *this.written < this.buffer.len() {
-            match ready!(this
-                .target
-                .as_mut()
-                .poll_write(cx, &this.buffer[*this.written..]))
-            {
-                Ok(num_sent) => *this.written += num_sent,
-                Err(e) => return Poll::Ready(Err(e)),
-            }
-        }
-        this.buffer.clear();
-        *this.written = 0;
-        Poll::Ready(Ok(()))
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: RawRadioMessage) -> Result<(), Self::Error> {
-        let this = self.project();
-        this.buffer.append(&mut item.into());
-        Ok(())
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        if let Err(e) = ready!(self.as_mut().poll_ready(cx)) {
-            Poll::Ready(Err(e))
-        } else {
-            let this = self.project();
-            this.target.poll_flush(cx)
-        }
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        if let Err(e) = ready!(self.as_mut().poll_ready(cx)) {
-            Poll::Ready(Err(e))
-        } else {
-            let this = self.project();
-            this.target.poll_close(cx)
-        }
-    }
-}
-
-#[pin_project]
-pub struct RawRadioStream<T: AsyncRead> {
-    #[pin]
-    source: T,
-    buffer: [u8; u16::max_value() as usize],
-    buffer_filled: usize,
-}
-
-fn find_subsequence<T>(haystack: &[T], needle: &[T]) -> Option<usize>
-where
-    for<'a> &'a [T]: PartialEq,
-{
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-impl<T: AsyncRead> RawRadioStream<T> {
-    pub fn new(source: T) -> RawRadioStream<T> {
-        RawRadioStream {
-            source,
-            buffer: [0; u16::max_value() as usize],
-            buffer_filled: 0,
-        }
-    }
-}
-
-fn pop_raw_message(buffer: &mut [u8]) -> (usize, Option<RawRadioMessage>) {
-    // Find prefix, if found, remove all before
-    // If not found, only keep enough bytes in the buffer so we don't miss the tag next time.
-    if buffer.len() < RADIO_MAGIC_PREFIX.len() {
-        return (buffer.len(), None);
-    }
-    let buffer = match find_subsequence(buffer, RADIO_MAGIC_PREFIX) {
-        None => {
-            buffer.rotate_right(RADIO_MAGIC_PREFIX.len());
-            return (RADIO_MAGIC_PREFIX.len(), None);
-        }
-        Some(index) => {
-            buffer.rotate_left(index);
-            let new_len = buffer.len() - index;
-            &mut buffer[0..new_len]
-        }
-    };
-    match parse_raw_radio_message(buffer) {
-        Ok((remaining, message)) => {
-            let remaining_len = remaining.len();
-            buffer.rotate_right(remaining_len);
-            (remaining_len, Some(message))
-        }
-        Err(nom::Err::Incomplete(_)) => (buffer.len(), None),
-        Err(e) => panic!("{:?}", e),
-    }
-}
-
-impl<T: AsyncRead> Stream for RawRadioStream<T> {
-    type Item = RawRadioMessage;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-        loop {
-            let (new_length, message) = pop_raw_message(&mut this.buffer[0..*this.buffer_filled]);
-            *this.buffer_filled = new_length;
-            if let Some(message) = message {
-                return Poll::Ready(Some(message));
-            }
-            let target_slice = &mut this.buffer[*this.buffer_filled..];
-            if target_slice.len() == 0 {
-                return Poll::Ready(None);
-            }
-            match ready!(this.source.as_mut().poll_read(cx, target_slice)) {
-                Ok(read) => {
-                    *this.buffer_filled += read;
+            data,
+        } = port.next().await.unwrap();
+        println!("Radio message received");
+        match command_id {
+            RawRadioCommand::Ok => {
+                println!("Received OK");
+                if let Some((token, parser)) = tokenmap.lock().await.remove(&request_id) {
+                    println!("Found token");
+                    responses
+                        .send(RadioIncoming::Response(token, parser(data)))
+                        .await
+                        .unwrap_or(());
+                } else {
+                    println!("Unable to find token for request_id {}", request_id);
                 }
-                Err(e) => return Poll::Ready(None),
             }
+            RawRadioCommand::Err => {
+                println!("Received Err");
+                if let Some((token, _)) = tokenmap.lock().await.remove(&request_id) {
+                    responses
+                        .send(RadioIncoming::Response(
+                            token,
+                            Err(RadioError::RawError(data)),
+                        ))
+                        .await
+                        .unwrap_or(());
+                }
+            }
+            RawRadioCommand::OnPacket => {},
+						_ => {
+							println!("Unexpected packed from radio: {:?}", command_id);
+						},
         }
     }
+}
+
+async fn radio_service<
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+    RQ: Stream<Item = (Token, RadioRequest)> + Unpin,
+    RS: Sink<RadioIncoming> + Unpin,
+>(
+    write: W,
+    read: R,
+    requests: RQ,
+    responses: RS,
+) {
+    let map = Mutex::new(HashMap::new());
+    let a = radio_request_task(write, requests, &map);
+    let b = radio_response_task(read, responses, &map);
+    futures::future::join(a, b).await;
+}
+
+pub fn start_radio<
+    S: Spawn,
+    W: AsyncWrite + Unpin + Send + 'static,
+    R: AsyncRead + Unpin + Send + 'static,
+>(
+    executor: S,
+    read: R,
+    write: W,
+) -> (
+    impl Sink<(Token, RadioRequest)>,
+    impl Stream<Item = RadioIncoming>,
+) {
+    let (response_in, response_out) = mpsc::channel(0);
+    let (request_in, request_out) = mpsc::channel(0);
+    let task = radio_service(write, read, request_out, response_in);
+    executor.spawn(task).unwrap();
+    (request_in, response_out)
 }

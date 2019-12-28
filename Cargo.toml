@@ -4,10 +4,15 @@ version = "0.1.0"
 authors = ["Frans-Willem Hardijzer <fw@hardijzer.nl>"]
 edition = "2018"
 
+[dependencies.futures]
+version = "0.3"
+features = ["thread-pool"]
+
 [dependencies]
 async-std = "1.4"
-futures = "0.3"
 pin-project = "0.4"
 nom = "5"
 cookie-factory = "0.3"
 serialport = "3.3"
+enum-tryfrom = "0.2"
+enum-tryfrom-derive = "0.2"
