@@ -1,57 +1,63 @@
-use async_std::fs::OpenOptions;
+#![allow(dead_code)]
 use async_std::task;
 use futures::prelude::{Sink, Stream};
-use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use pin_project::pin_project;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::vec::Vec;
 mod radio;
 mod tokenmap;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use futures::task::SpawnExt;
-use radio::raw::*;
+use futures::io::AsyncReadExt;
 use std::os::unix::io::{FromRawFd, IntoRawFd};
-use tokenmap::{Token, TokenMap};
+use tokenmap::TokenMap;
 
-async fn radio_single_request<
-    RQ: Sink<(Token, radio::RadioRequest)> + Unpin,
-    RS: Stream<Item = radio::RadioIncoming> + Unpin,
+/**
+ * Quickly gets a parameter from the radio,
+ * ignoring all other responses received before the get-response.
+ */
+async fn radio_get_param<
+    RQ: Sink<radio::RadioRequest> + Unpin,
+    RS: Stream<Item = radio::RadioResponse> + Unpin,
 >(
     radio_requests: &mut RQ,
     radio_responses: &mut RS,
-    request: radio::RadioRequest,
-) -> Result<radio::RadioResponse, radio::RadioError> {
+    param: radio::RadioParam,
+    param_type: radio::RadioParamType,
+) -> Result<radio::RadioParamValue, radio::RadioError> {
     let mut map = TokenMap::new();
     let token = map.insert(());
     println!("Assigned token: {:?}", token);
-    radio_requests.send((token, request)).await;
+    radio_requests
+        .send(radio::RadioRequest::GetParam(
+            Some(token),
+            param,
+            param_type,
+        ))
+        .await
+        .unwrap_or(());
     loop {
         println!("Getting response?");
-        if let Some(radio::RadioIncoming::Response(token, response)) = radio_responses.next().await
+        if let Some(radio::RadioResponse::GetParam(Some(token), _, result)) =
+            radio_responses.next().await
         {
             if let Some(_) = map.remove(token) {
-                return response;
+                return result;
             }
         }
     }
 }
 
 async fn async_main<
-    RQ: Sink<(Token, radio::RadioRequest)> + Unpin,
-    RS: Stream<Item = radio::RadioIncoming> + Unpin,
+    RQ: Sink<radio::RadioRequest> + Unpin,
+    RS: Stream<Item = radio::RadioResponse> + Unpin,
 >(
     mut radio_requests: RQ,
     mut radio_responses: RS,
 ) {
     println!("Async main go go go!");
-    let max_tx_power = radio_single_request(
+    let max_tx_power = radio_get_param(
         &mut radio_requests,
         &mut radio_responses,
-        radio::RadioRequest::GetMaxTxPower,
+        radio::RadioParam::TxPowerMax,
+        radio::RadioParamType::U16,
     )
     .await
     .unwrap();
@@ -81,15 +87,8 @@ fn main() {
     .unwrap();
     let port = unsafe { async_std::fs::File::from_raw_fd(port.into_raw_fd()) };
 
-    let (mut portin, mut portout) = port.split();
-    //let mut executor = futures::executor::ThreadPool::new().unwrap();
+    let (portin, portout) = port.split();
     let (radio_requests, radio_responses) = radio::start_radio(AsyncStdSpawner(), portin, portout);
-    /*
-        executor
-            .spawn(async_main(radio_requests, radio_responses))
-            .unwrap();
-    */
     println!("Done?");
-    //executor.run();
     task::block_on(async_main(radio_requests, radio_responses));
 }

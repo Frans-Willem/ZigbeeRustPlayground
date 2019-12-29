@@ -4,11 +4,8 @@ version = "0.1.0"
 authors = ["Frans-Willem Hardijzer <fw@hardijzer.nl>"]
 edition = "2018"
 
-[dependencies.futures]
-version = "0.3"
-features = ["thread-pool"]
-
 [dependencies]
+futures = "0.3"
 async-std = "1.4"
 pin-project = "0.4"
 nom = "5"

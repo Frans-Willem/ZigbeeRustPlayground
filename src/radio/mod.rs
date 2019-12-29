@@ -10,21 +10,68 @@ use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 use futures::task::{Spawn, SpawnExt};
 use std::collections::HashMap;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::marker::Unpin;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
+
+pub type RadioParam = RawRadioParam;
+
+#[derive(Debug, Clone, Copy)]
+pub enum RadioParamType {
+    U16,
+    U32,
+    U64,
+}
+
+#[derive(Debug)]
+pub enum RadioParamValue {
+    U16(u16),
+    U32(u32),
+    U64(u64),
+}
+
+impl TryFrom<(RadioParamType, &[u8])> for RadioParamValue {
+    type Error = RadioError;
+
+    fn try_from(input: (RadioParamType, &[u8])) -> Result<RadioParamValue, RadioError> {
+        let (param_type, data) = input;
+        println!("RadioParamValue::try_from: {:?} {:?}", param_type, data);
+        match param_type {
+            RadioParamType::U16 => match data.try_into() {
+                Ok(data) => Ok(RadioParamValue::U16(u16::from_be_bytes(data))),
+                Err(_) => Err(RadioError::UnexpectedResponseSize),
+            },
+            RadioParamType::U32 => match data.try_into() {
+                Ok(data) => Ok(RadioParamValue::U32(u32::from_be_bytes(data))),
+                Err(_) => Err(RadioError::UnexpectedResponseSize),
+            },
+            RadioParamType::U64 => match data.try_into() {
+                Ok(data) => Ok(RadioParamValue::U64(u64::from_be_bytes(data))),
+                Err(_) => Err(RadioError::UnexpectedResponseSize),
+            },
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum RadioRequest {
-	SetParam16(Option<Token>, RawRadioParam, u16),
-	SetParam64(Option<Token>, RawRadioParam, u64),
+    SetParam(Option<Token>, RawRadioParam, RadioParamValue),
+    GetParam(Option<Token>, RawRadioParam, RadioParamType),
 }
 
 #[derive(Debug)]
 pub enum RadioResponse {
-	SetParam16(Option<Token>, RawRadioParam, Result<u16, RadioError>),
-	SetParam64(Option<Token>, RawRadioParam, Result<u64, RadioError>),
-	OnPacket(Vec<u8>),
+    SetParam(
+        Option<Token>,
+        RadioParam,
+        Result<RadioParamValue, RadioError>,
+    ),
+    GetParam(
+        Option<Token>,
+        RadioParam,
+        Result<RadioParamValue, RadioError>,
+    ),
+    OnPacket(Vec<u8>),
 }
 
 #[derive(Debug)]
@@ -35,90 +82,88 @@ pub struct RadioPacket {
 #[derive(Debug)]
 pub enum RadioError {
     RawError(Vec<u8>),
+    RetvalError(u16, Vec<u8>),
     UnexpectedResponse,
+    UnexpectedResponseSize,
 }
 
-#[derive(Debug)]
-pub enum RadioIncoming {
-    Response(Token, Result<RadioResponse, RadioError>),
-    Packet(RadioPacket),
-}
-
-type RadioResponseParser = fn(Vec<u8>) -> Result<RadioResponse, RadioError>;
-
-fn parse_max_power_response(data: Vec<u8>) -> Result<RadioResponse, RadioError> {
-    if data.len() == 2 {
-        Ok(RadioResponse::MaxTxPower(u16::from_be_bytes(
-            data.deref().try_into().unwrap(),
-        )))
-    } else {
-        println!("Unexpected: {:?}", data);
-        Err(RadioError::UnexpectedResponse)
-    }
-}
+type RadioResponseParser = Box<dyn FnOnce(Result<&[u8], RadioError>) -> RadioResponse + Send>;
 
 impl RadioRequest {
-    fn response_parser(&self) -> RadioResponseParser {
+    fn to_raw(self) -> (raw::RawRadioCommand, Vec<u8>, RadioResponseParser) {
         match self {
-            RadioRequest::GetMaxTxPower => parse_max_power_response,
-        }
-    }
-    fn to_raw(self, request_id: u16) -> RawRadioMessage {
-        match self {
-            RadioRequest::GetMaxTxPower => RawRadioMessage {
-                command_id: RawRadioCommand::GetValue,
-                request_id,
-                data: (RawRadioParam::TxPowerMax as u16)
-                    .to_be_bytes()
-                    .as_ref()
-                    .into(),
-            },
+            RadioRequest::GetParam(token, param, param_type) => (
+                match param_type {
+                    RadioParamType::U16 => RawRadioCommand::GetValue,
+                    _ => RawRadioCommand::GetObject,
+                },
+                {
+                    let mut data = (param as u16).to_be_bytes().as_ref().to_vec();
+                    match param_type {
+                        RadioParamType::U16 => (),
+                        RadioParamType::U32 => {
+                            data.extend_from_slice((4 as u16).to_be_bytes().as_ref())
+                        }
+                        RadioParamType::U64 => {
+                            data.extend_from_slice((8 as u16).to_be_bytes().as_ref())
+                        }
+                    };
+                    data
+                },
+                Box::new(move |response| {
+                    RadioResponse::GetParam(
+                        token,
+                        param,
+                        match response {
+                            Ok(data) => RadioParamValue::try_from((param_type, data)),
+                            Err(err) => Err(err),
+                        },
+                    )
+                }),
+            ),
+            _ => todo!(),
         }
     }
 }
 
-async fn radio_request_task<
-    W: AsyncWrite + Unpin,
-    S: Stream<Item = (Token, RadioRequest)> + Unpin,
->(
+async fn radio_request_task<W: AsyncWrite + Unpin, S: Stream<Item = RadioRequest> + Unpin>(
     port: W,
     mut requests: S,
-    tokenmap: &Mutex<HashMap<u16, (Token, RadioResponseParser)>>,
+    responsemap: &Mutex<HashMap<u16, RadioResponseParser>>,
 ) {
     let mut port = RawRadioSink::new(port);
-    let mut next_request_id: u16 = 0;
-    loop {
-        println!("Checking for requests");
-        if let Some((token, request)) = requests.next().await {
-            let request_id = {
-                let mut tokenmap = tokenmap.lock().await;
-                while tokenmap.contains_key(&next_request_id) {
-                    next_request_id += 1;
-                }
-                let request_id = next_request_id;
+    let mut next_request_id: u16 = 4;
+    while let Some(request) = requests.next().await {
+        // Generate a request ID.
+        let (command_id, data, response_parser) = request.to_raw();
+        let request_id = {
+            let mut responsemap = responsemap.lock().await;
+            while responsemap.contains_key(&next_request_id) {
                 next_request_id += 1;
-                tokenmap
-                    .deref_mut()
-                    .insert(request_id, (token, request.response_parser()));
-                request_id
-            };
-            println!("Sending request with request id {}", request_id);
-            let request = request.to_raw(request_id);
-            println!("Request: {:?}", request);
-            if let Err(e) = port.send(request).await {
-                println!("Unable to send :/");
             }
-        } else {
-            println!("Requests dried up, stopping radio service");
-            break;
+            let request_id = next_request_id;
+            responsemap.insert(request_id, response_parser);
+            next_request_id += 1;
+            request_id
+        };
+        println!("Sending request with request id {}", request_id);
+        let request = raw::RawRadioMessage {
+            command_id,
+            request_id,
+            data,
+        };
+        println!("Request: {:?}", request);
+        if let Err(e) = port.send(request).await {
+            println!("Unable to send: {:?}", e);
         }
     }
+    println!("Radio: Requests dried up, stopping service");
 }
 
-async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioIncoming> + Unpin>(
+async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioResponse> + Unpin>(
     port: R,
     mut responses: S,
-    tokenmap: &Mutex<HashMap<u16, (Token, RadioResponseParser)>>,
+    responsemap: &Mutex<HashMap<u16, RadioResponseParser>>,
 ) {
     let mut port = RawRadioStream::new(port);
     loop {
@@ -128,36 +173,46 @@ async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioIncoming> + Unpi
             request_id,
             data,
         } = port.next().await.unwrap();
-        println!("Radio message received");
+        println!(
+            "Radio message received {:?} {:?} {:?}",
+            command_id, request_id, data
+        );
         match command_id {
             RawRadioCommand::Ok => {
-                println!("Received OK");
-                if let Some((token, parser)) = tokenmap.lock().await.remove(&request_id) {
-                    println!("Found token");
+                if let Some(parser) = responsemap.lock().await.remove(&request_id) {
                     responses
-                        .send(RadioIncoming::Response(token, parser(data)))
+                        .send(parser(if data.len() < 2 {
+                            Err(RadioError::UnexpectedResponseSize)
+                        } else {
+                            let retval = u16::from_be_bytes(data[0..2].try_into().unwrap());
+                            if retval == 0 {
+                                Ok(&data[2..])
+                            } else {
+                                Err(RadioError::RetvalError(retval, data[2..].to_vec()))
+                            }
+                        }))
                         .await
                         .unwrap_or(());
                 } else {
-                    println!("Unable to find token for request_id {}", request_id);
+                    println!(
+                        "Unable to find response parser for request_id {}",
+                        request_id
+                    );
                 }
             }
             RawRadioCommand::Err => {
                 println!("Received Err");
-                if let Some((token, _)) = tokenmap.lock().await.remove(&request_id) {
+                if let Some(parser) = responsemap.lock().await.remove(&request_id) {
                     responses
-                        .send(RadioIncoming::Response(
-                            token,
-                            Err(RadioError::RawError(data)),
-                        ))
+                        .send(parser(Err(RadioError::RawError(data))))
                         .await
                         .unwrap_or(());
                 }
             }
-            RawRadioCommand::OnPacket => {},
-						_ => {
-							println!("Unexpected packed from radio: {:?}", command_id);
-						},
+            RawRadioCommand::OnPacket => {}
+            _ => {
+                println!("Unexpected packed from radio: {:?}", command_id);
+            }
         }
     }
 }
@@ -165,8 +220,8 @@ async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioIncoming> + Unpi
 async fn radio_service<
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
-    RQ: Stream<Item = (Token, RadioRequest)> + Unpin,
-    RS: Sink<RadioIncoming> + Unpin,
+    RQ: Stream<Item = RadioRequest> + Unpin,
+    RS: Sink<RadioResponse> + Unpin,
 >(
     write: W,
     read: R,
@@ -187,10 +242,7 @@ pub fn start_radio<
     executor: S,
     read: R,
     write: W,
-) -> (
-    impl Sink<(Token, RadioRequest)>,
-    impl Stream<Item = RadioIncoming>,
-) {
+) -> (impl Sink<RadioRequest>, impl Stream<Item = RadioResponse>) {
     let (response_in, response_out) = mpsc::channel(0);
     let (request_in, request_out) = mpsc::channel(0);
     let task = radio_service(write, read, request_out, response_in);

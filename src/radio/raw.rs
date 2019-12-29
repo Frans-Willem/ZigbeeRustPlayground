@@ -3,7 +3,7 @@ use enum_tryfrom_derive::TryFromPrimitive;
 use futures::prelude::*;
 use futures::ready;
 use pin_project::pin_project;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::io::Write;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -56,7 +56,6 @@ pub enum RawRadioParam {
     ChannelMax,
     TxPowerMin,
     TxPowerMax,
-
 }
 
 pub fn gen_raw_radio_message<'a, W: Write + 'a>(
@@ -85,13 +84,14 @@ impl Into<Vec<u8>> for RawRadioMessage {
 }
 
 pub fn parse_raw_radio_message(input: &[u8]) -> nom::IResult<&[u8], RawRadioMessage> {
+    println!("parse_raw_radio_message: {:?}", input);
     let (input, (_, command_id, request_id, data_len)) = nom::sequence::tuple((
         nom::bytes::streaming::tag(RADIO_MAGIC_PREFIX),
         nom::number::streaming::be_u8,
         nom::number::streaming::be_u16,
         nom::number::streaming::be_u16,
     ))(input)?;
-		let command_id : RawRadioCommand = RawRadioCommand::try_from(command_id).unwrap();
+    let command_id: RawRadioCommand = RawRadioCommand::try_from(command_id).unwrap();
     let (input, data) = nom::bytes::streaming::take(data_len as usize)(input)?;
     Ok((
         input,
@@ -239,7 +239,10 @@ impl<T: AsyncRead> Stream for RawRadioStream<T> {
                 Ok(read) => {
                     *this.buffer_filled += read;
                 }
-                Err(e) => return Poll::Ready(None),
+                Err(e) => {
+                    println!("Error from radio stream: {:?}", e);
+                    return Poll::Ready(None);
+                }
             }
         }
     }
