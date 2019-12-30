@@ -84,7 +84,6 @@ impl Into<Vec<u8>> for RawRadioMessage {
 }
 
 pub fn parse_raw_radio_message(input: &[u8]) -> nom::IResult<&[u8], RawRadioMessage> {
-    println!("parse_raw_radio_message: {:?}", input);
     let (input, (_, command_id, request_id, data_len)) = nom::sequence::tuple((
         nom::bytes::streaming::tag(RADIO_MAGIC_PREFIX),
         nom::number::streaming::be_u8,

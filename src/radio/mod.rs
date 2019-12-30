@@ -3,16 +3,17 @@ use crate::radio::raw::{
     RawRadioCommand, RawRadioMessage, RawRadioParam, RawRadioSink, RawRadioStream,
 };
 use crate::tokenmap::Token;
+use crate::unique_key::UniqueKey;
 use async_std::sync::Mutex;
 use futures::channel::mpsc;
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 use futures::task::{Spawn, SpawnExt};
+use rand::prelude::*;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::marker::Unpin;
-use std::ops::Deref;
 
 pub type RadioParam = RawRadioParam;
 
@@ -35,7 +36,6 @@ impl TryFrom<(RadioParamType, &[u8])> for RadioParamValue {
 
     fn try_from(input: (RadioParamType, &[u8])) -> Result<RadioParamValue, RadioError> {
         let (param_type, data) = input;
-        println!("RadioParamValue::try_from: {:?} {:?}", param_type, data);
         match param_type {
             RadioParamType::U16 => match data.try_into() {
                 Ok(data) => Ok(RadioParamValue::U16(u16::from_be_bytes(data))),
@@ -55,22 +55,18 @@ impl TryFrom<(RadioParamType, &[u8])> for RadioParamValue {
 
 #[derive(Debug)]
 pub enum RadioRequest {
-    SetParam(Option<Token>, RawRadioParam, RadioParamValue),
-    GetParam(Option<Token>, RawRadioParam, RadioParamType),
+    SetParam(UniqueKey, RawRadioParam, RadioParamValue),
+    GetParam(UniqueKey, RawRadioParam, RadioParamType),
+    InitPendingDataTable(UniqueKey),
+    SetPower(UniqueKey, bool),
 }
 
 #[derive(Debug)]
 pub enum RadioResponse {
-    SetParam(
-        Option<Token>,
-        RadioParam,
-        Result<RadioParamValue, RadioError>,
-    ),
-    GetParam(
-        Option<Token>,
-        RadioParam,
-        Result<RadioParamValue, RadioError>,
-    ),
+    SetParam(UniqueKey, RadioParam, Result<RadioParamValue, RadioError>),
+    GetParam(UniqueKey, RadioParam, Result<RadioParamValue, RadioError>),
+    InitPendingDataTable(UniqueKey, Result<(), RadioError>),
+    SetPower(UniqueKey, bool, Result<(), RadioError>),
     OnPacket(Vec<u8>),
 }
 
@@ -87,18 +83,53 @@ pub enum RadioError {
     UnexpectedResponseSize,
 }
 
+impl From<std::array::TryFromSliceError> for RadioError {
+    fn from(_: std::array::TryFromSliceError) -> RadioError {
+        RadioError::UnexpectedResponseSize
+    }
+}
+
 type RadioResponseParser = Box<dyn FnOnce(Result<&[u8], RadioError>) -> RadioResponse + Send>;
 
 impl RadioRequest {
     fn to_raw(self) -> (raw::RawRadioCommand, Vec<u8>, RadioResponseParser) {
         match self {
+            RadioRequest::SetParam(token, param, param_value) => (
+                match param_value {
+                    RadioParamValue::U16(_) => RawRadioCommand::SetValue,
+                    _ => RawRadioCommand::SetObject,
+                },
+                {
+                    let mut data = (param as u16).to_be_bytes().to_vec();
+                    match param_value {
+                        RadioParamValue::U16(v) => data.extend_from_slice(v.to_be_bytes().as_ref()),
+                        RadioParamValue::U32(v) => data.extend_from_slice(v.to_be_bytes().as_ref()),
+                        RadioParamValue::U64(v) => data.extend_from_slice(v.to_be_bytes().as_ref()),
+                    }
+                    data
+                },
+                Box::new(move |response| {
+                    RadioResponse::SetParam(
+                        token,
+                        param,
+                        response.and_then(|data| {
+                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
+                            if retval == 0 {
+                                Ok(param_value)
+                            } else {
+                                Err(RadioError::RetvalError(retval, Vec::new()))
+                            }
+                        }),
+                    )
+                }),
+            ),
             RadioRequest::GetParam(token, param, param_type) => (
                 match param_type {
                     RadioParamType::U16 => RawRadioCommand::GetValue,
                     _ => RawRadioCommand::GetObject,
                 },
                 {
-                    let mut data = (param as u16).to_be_bytes().as_ref().to_vec();
+                    let mut data = (param as u16).to_be_bytes().to_vec();
                     match param_type {
                         RadioParamType::U16 => (),
                         RadioParamType::U32 => {
@@ -121,7 +152,45 @@ impl RadioRequest {
                     )
                 }),
             ),
-            _ => todo!(),
+            RadioRequest::InitPendingDataTable(token) => (
+                RawRadioCommand::InitPendingTable,
+                Vec::new(),
+                Box::new(move |response| {
+                    RadioResponse::InitPendingDataTable(
+                        token,
+                        response.and_then(|data| {
+                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
+                            if retval == 0 {
+                                Ok(())
+                            } else {
+                                Err(RadioError::RetvalError(retval, Vec::new()))
+                            }
+                        }),
+                    )
+                }),
+            ),
+            RadioRequest::SetPower(token, power) => (
+                if power {
+                    RawRadioCommand::On
+                } else {
+                    RawRadioCommand::Off
+                },
+                Vec::new(),
+                Box::new(move |response| {
+                    RadioResponse::SetPower(
+                        token,
+                        power,
+                        response.and_then(|data| {
+                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
+                            if retval == 0 {
+                                Ok(())
+                            } else {
+                                Err(RadioError::RetvalError(retval, Vec::new()))
+                            }
+                        }),
+                    )
+                }),
+            ),
         }
     }
 }
@@ -132,27 +201,25 @@ async fn radio_request_task<W: AsyncWrite + Unpin, S: Stream<Item = RadioRequest
     responsemap: &Mutex<HashMap<u16, RadioResponseParser>>,
 ) {
     let mut port = RawRadioSink::new(port);
-    let mut next_request_id: u16 = 4;
     while let Some(request) = requests.next().await {
         // Generate a request ID.
         let (command_id, data, response_parser) = request.to_raw();
         let request_id = {
             let mut responsemap = responsemap.lock().await;
-            while responsemap.contains_key(&next_request_id) {
-                next_request_id += 1;
-            }
-            let request_id = next_request_id;
+            let request_id = loop {
+                let potential_id = rand::thread_rng().gen();
+                if !responsemap.contains_key(&potential_id) {
+                    break potential_id;
+                }
+            };
             responsemap.insert(request_id, response_parser);
-            next_request_id += 1;
             request_id
         };
-        println!("Sending request with request id {}", request_id);
         let request = raw::RawRadioMessage {
             command_id,
             request_id,
             data,
         };
-        println!("Request: {:?}", request);
         if let Err(e) = port.send(request).await {
             println!("Unable to send: {:?}", e);
         }
@@ -167,16 +234,11 @@ async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioResponse> + Unpi
 ) {
     let mut port = RawRadioStream::new(port);
     loop {
-        println!("Reading radio message");
         let RawRadioMessage {
             command_id,
             request_id,
             data,
         } = port.next().await.unwrap();
-        println!(
-            "Radio message received {:?} {:?} {:?}",
-            command_id, request_id, data
-        );
         match command_id {
             RawRadioCommand::Ok => {
                 if let Some(parser) = responsemap.lock().await.remove(&request_id) {

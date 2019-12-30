@@ -5,9 +5,11 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 mod radio;
 mod tokenmap;
+mod unique_key;
 use futures::io::AsyncReadExt;
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use tokenmap::TokenMap;
+use unique_key::UniqueKey;
 
 /**
  * Quickly gets a parameter from the radio,
@@ -22,23 +24,16 @@ async fn radio_get_param<
     param: radio::RadioParam,
     param_type: radio::RadioParamType,
 ) -> Result<radio::RadioParamValue, radio::RadioError> {
-    let mut map = TokenMap::new();
-    let token = map.insert(());
-    println!("Assigned token: {:?}", token);
+    let token = UniqueKey::new();
     radio_requests
-        .send(radio::RadioRequest::GetParam(
-            Some(token),
-            param,
-            param_type,
-        ))
+        .send(radio::RadioRequest::GetParam(token, param, param_type))
         .await
         .unwrap_or(());
     loop {
-        println!("Getting response?");
-        if let Some(radio::RadioResponse::GetParam(Some(token), _, result)) =
+        if let Some(radio::RadioResponse::GetParam(response_token, _, result)) =
             radio_responses.next().await
         {
-            if let Some(_) = map.remove(token) {
+            if token == response_token {
                 return result;
             }
         }
@@ -56,12 +51,14 @@ async fn async_main<
     let max_tx_power = radio_get_param(
         &mut radio_requests,
         &mut radio_responses,
-        radio::RadioParam::TxPowerMax,
-        radio::RadioParamType::U16,
+        radio::RadioParam::LongAddress,
+        radio::RadioParamType::U64,
     )
     .await
     .unwrap();
-    println!("Maximum TX power: {:?}", max_tx_power);
+    if let radio::RadioParamValue::U64(v) = max_tx_power {
+        println!("Address: {:X}", v);
+    }
 }
 
 struct AsyncStdSpawner();
