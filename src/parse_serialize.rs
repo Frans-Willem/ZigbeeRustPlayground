@@ -181,20 +181,36 @@ fn test_simple_serialize() {
 
 #[test]
 fn test_structure_derive() {
-    #[derive(PartialEq,Eq,Debug,Serialize,Deserialize)]
+    #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
     struct Test {
         x: u8,
         y: u16,
-        z: u32
+        z: u32,
     };
-    test_simple_serialization_roundtrip(
-        Test {
-            x: 1,
-            y: 2,
-            z: 3
-        },
-        vec![1,2,0,3,0,0,0]
-        );
+    test_simple_serialization_roundtrip(Test { x: 1, y: 2, z: 3 }, vec![1, 2, 0, 3, 0, 0, 0]);
+}
+
+#[test]
+fn test_unnamed_structure_derive() {
+    #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+    struct Test(u8, u16, u32);
+    test_simple_serialization_roundtrip(Test(1, 2, 3), vec![1, 2, 0, 3, 0, 0, 0]);
+}
+
+#[test]
+fn test_simple_enum_derive() {
+    #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+    #[serialize_tag_type(u8)]
+    enum Test8 {
+        A = 12,
+        B = 34,
+        #[serialize_tag(56)]
+        C,
+    }
+    test_simple_serialization_roundtrip(Test8::A, vec![12]);
+    test_simple_serialization_roundtrip(Test8::B, vec![34]);
+    test_simple_serialization_roundtrip(Test8::C, vec![56]);
+
 }
 /*
 
