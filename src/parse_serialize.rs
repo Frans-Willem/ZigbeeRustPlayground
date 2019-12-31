@@ -1,7 +1,5 @@
 pub use derives::{Deserialize, Serialize};
-use generic_array::{ArrayLength, GenericArray};
 use nom::IResult;
-use std::iter::FromIterator;
 
 #[derive(Debug)]
 pub enum SerializeError {
@@ -166,7 +164,7 @@ impl Serialize for bool {
 
 impl Deserialize for bool {
     fn deserialize(input: &[u8]) -> DeserializeResult<bool> {
-        nom::combinator::map(u8::deserialize, |v: u8| v >= 0)(input)
+        nom::combinator::map(u8::deserialize, |v: u8| v > 0)(input)
     }
 }
 
@@ -236,23 +234,5 @@ impl<T1: Serialize, T2: Serialize, T3: Serialize, T4: Serialize, T5: Serialize> 
         self.3.serialize_to(target)?;
         self.4.serialize_to(target)?;
         Ok(())
-    }
-}
-
-impl<T: Serialize, N: ArrayLength<T>> Serialize for GenericArray<T, N> {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        for i in self {
-            i.serialize_to(target)?;
-        }
-        Ok(())
-    }
-}
-
-impl<T: Deserialize, N: ArrayLength<T>> Deserialize for GenericArray<T, N> {
-    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
-        nom::combinator::map(
-            nom::multi::count(T::deserialize, N::to_usize()),
-            |vec: Vec<T>| GenericArray::from_iter(vec.into_iter()),
-        )(input)
     }
 }

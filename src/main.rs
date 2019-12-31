@@ -7,6 +7,7 @@ use futures::task::SpawnExt;
 mod async_std_executor;
 mod radio;
 mod unique_key;
+mod parse_serialize;
 use futures::io::AsyncReadExt;
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use unique_key::UniqueKey;
