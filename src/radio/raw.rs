@@ -231,7 +231,7 @@ impl<T: AsyncRead> Stream for RawRadioStream<T> {
                 return Poll::Ready(Some(message));
             }
             let target_slice = &mut this.buffer[*this.buffer_filled..];
-            if target_slice.len() == 0 {
+            if target_slice.is_empty() {
                 return Poll::Ready(None);
             }
             match ready!(this.source.as_mut().poll_read(cx, target_slice)) {

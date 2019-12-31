@@ -3,12 +3,12 @@ use async_std::task;
 use futures::prelude::{Sink, Stream};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
+use futures::task::SpawnExt;
+mod async_std_executor;
 mod radio;
-mod tokenmap;
 mod unique_key;
 use futures::io::AsyncReadExt;
 use std::os::unix::io::{FromRawFd, IntoRawFd};
-use tokenmap::TokenMap;
 use unique_key::UniqueKey;
 
 /**
@@ -61,18 +61,6 @@ async fn async_main<
     }
 }
 
-struct AsyncStdSpawner();
-
-impl futures::task::Spawn for AsyncStdSpawner {
-    fn spawn_obj(
-        &self,
-        future: futures::task::FutureObj<'static, ()>,
-    ) -> Result<(), futures::task::SpawnError> {
-        async_std::task::spawn(future);
-        Ok(())
-    }
-}
-
 fn main() {
     println!("Hello world!");
     let port = serialport::posix::TTYPort::open(
@@ -85,7 +73,10 @@ fn main() {
     let port = unsafe { async_std::fs::File::from_raw_fd(port.into_raw_fd()) };
 
     let (portin, portout) = port.split();
-    let (radio_requests, radio_responses) = radio::start_radio(AsyncStdSpawner(), portin, portout);
+    let exec = async_std_executor::AsyncStdExecutor::new();
+    let (radio_requests, radio_responses) = radio::start_radio(exec.clone(), portin, portout);
     println!("Done?");
-    task::block_on(async_main(radio_requests, radio_responses));
+    exec.spawn(async_main(radio_requests, radio_responses))
+        .unwrap();
+    task::block_on(exec);
 }
