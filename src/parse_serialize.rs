@@ -1,8 +1,8 @@
+use cookie_factory::{GenResult, WriteContext};
 pub use derives::{Deserialize, Serialize};
+use impl_trait_for_tuples::impl_for_tuples;
 use nom::IResult;
 use std::io::Write;
-use cookie_factory::{GenResult, WriteContext};
-use impl_trait_for_tuples::impl_for_tuples;
 
 #[derive(Debug)]
 pub enum SerializeError {
@@ -66,10 +66,10 @@ pub trait Deserialize: Sized {
     fn deserialize_complete(input: &[u8]) -> SerializeResult<Self> {
         match Self::deserialize(input) {
             Ok((remaining, result)) => {
-                if remaining.len() != 0 {
-                    Err(SerializeError::DataLeft)
-                } else {
+                if remaining.is_empty() {
                     Ok(result)
+                } else {
+                    Err(SerializeError::DataLeft)
                 }
             }
             Err(nom::Err::Incomplete(_)) => Err(SerializeError::InsufficientData),
@@ -85,8 +85,8 @@ pub trait DeserializeTagged: SerializeTagged + Sized {
 
 pub type SerializeResult<T> = std::result::Result<T, SerializeError>;
 
-pub trait Serialize<W>: Sized {
-    fn serialize(self, ctx: WriteContext<W>) -> GenResult<W>;
+pub trait Serialize: Sized {
+    fn serialize<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W>;
 }
 
 pub trait SerializeTagged {
@@ -105,12 +105,9 @@ macro_rules! default_impl {
                 std::result::Result::Ok((input, <$t>::from_le_bytes(data)))
             }
         }
-        impl<W: Write> $crate::parse_serialize::Serialize<W> for $t {
-            fn serialize(
-                self,
-                ctx: WriteContext<W>
-            ) -> GenResult<W> {
-                cookie_factory::combinator::slice(&self.to_le_bytes())(ctx)
+        impl $crate::parse_serialize::Serialize for $t {
+            fn serialize<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W> {
+                cookie_factory::combinator::slice(&self.clone().to_le_bytes())(ctx)
             }
         }
     };
@@ -127,9 +124,9 @@ default_impl!(i32);
 default_impl!(i64);
 default_impl!(i128);
 
-impl<W: Write> Serialize<W> for bool {
-    fn serialize(self, ctx: WriteContext<W>) -> GenResult<W> {
-        (self as u8).serialize(ctx)
+impl Serialize for bool {
+    fn serialize<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W> {
+        (*self as u8).serialize(ctx)
     }
 }
 
@@ -140,27 +137,64 @@ impl Deserialize for bool {
 }
 
 #[impl_for_tuples(10)]
-impl<W: Write> Serialize<W> for Tuple {
-    fn serialize(self, ctx: WriteContext<W>) -> GenResult<W> {
+impl Serialize for Tuple {
+    fn serialize<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W> {
         for_tuples!( #( let ctx = Tuple.serialize(ctx)?; )* );
         Ok(ctx)
     }
 }
 
+#[impl_for_tuples(10)]
+impl Deserialize for Tuple {
+    fn deserialize(input: &[u8]) -> DeserializeResult<Self> {
+        for_tuples!( #( let (input, Tuple) = Tuple::deserialize(input)?; )* );
+        Ok((input, (for_tuples!( #( Tuple ),* ))))
+    }
+}
+
+#[cfg(test)]
+fn test_simple_serialization_roundtrip<T: Serialize + Deserialize + Eq + std::fmt::Debug>(
+    input: T,
+    output: Vec<u8>,
+) {
+    let deserialized = T::deserialize_complete(&output).unwrap();
+    assert_eq!(input, deserialized);
+    let mut serialized = Vec::new();
+    cookie_factory::gen(move |ctx| input.serialize(ctx), &mut serialized).unwrap();
+    assert_eq!(output, serialized);
+}
+
 #[test]
 fn test_simple_serialize() {
-    let input = (1 as u8, 2 as u16, 3 as u32, 4 as u64, true as bool, false as bool);
-    let expected_output = vec![
-        1,
-        2,0,
-        3,0,0,0,
-        4,0,0,0,0,0,0,0,
-        1,
-        0,
-    ];
-    let mut output = Vec::new();
-    cookie_factory::gen(move |ctx| input.serialize(ctx), &mut output).unwrap();
-    assert_eq!(output, expected_output);
+    test_simple_serialization_roundtrip(
+        (
+            1 as u8,
+            2 as u16,
+            3 as u32,
+            4 as u64,
+            true as bool,
+            false as bool,
+        ),
+        vec![1, 2, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    );
+}
+
+#[test]
+fn test_structure_derive() {
+    #[derive(PartialEq,Eq,Debug,Serialize,Deserialize)]
+    struct Test {
+        x: u8,
+        y: u16,
+        z: u32
+    };
+    test_simple_serialization_roundtrip(
+        Test {
+            x: 1,
+            y: 2,
+            z: 3
+        },
+        vec![1,2,0,3,0,0,0]
+        );
 }
 /*
 

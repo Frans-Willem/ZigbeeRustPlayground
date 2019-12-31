@@ -36,16 +36,16 @@ fn impl_serialize_macro(ast: &syn::DeriveInput) -> TokenStream {
             Literal::usize_unsuffixed(current_index).into()
         };
         let serialize_stmt: TokenStream = quote! {
-            self.#field_name.serialize_to(target)?;
+            let ctx = self.#field_name.serialize(ctx)?;
         }
         .into();
         serialize_stmts.extend(serialize_stmt);
     }
     let gen = quote! {
         impl crate::parse_serialize::Serialize for #name {
-            fn serialize_to(&self, target: &mut Vec<u8>) -> crate::parse_serialize::SerializeResult<()> {
+            fn serialize<W: std::io::Write>(&self, ctx: cookie_factory::WriteContext<W>) -> cookie_factory::GenResult<W> {
                #serialize_stmts
-               Ok(())
+               Ok(ctx)
             }
         }
     };
