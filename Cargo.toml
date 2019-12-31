@@ -16,3 +16,4 @@ enum-tryfrom-derive = "0.2"
 snowflake = "1.2"
 rand = "0.7"
 derives = { path = "./derives" }
+impl-trait-for-tuples = "0.1"

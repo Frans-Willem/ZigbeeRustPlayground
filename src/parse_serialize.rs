@@ -1,5 +1,8 @@
 pub use derives::{Deserialize, Serialize};
 use nom::IResult;
+use std::io::Write;
+use cookie_factory::{GenResult, WriteContext};
+use impl_trait_for_tuples::impl_for_tuples;
 
 #[derive(Debug)]
 pub enum SerializeError {
@@ -82,13 +85,8 @@ pub trait DeserializeTagged: SerializeTagged + Sized {
 
 pub type SerializeResult<T> = std::result::Result<T, SerializeError>;
 
-pub trait Serialize: Sized {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()>;
-    fn serialize(&self) -> SerializeResult<Vec<u8>> {
-        let mut result = vec![];
-        self.serialize_to(&mut result)?;
-        Ok(result)
-    }
+pub trait Serialize<W>: Sized {
+    fn serialize(self, ctx: WriteContext<W>) -> GenResult<W>;
 }
 
 pub trait SerializeTagged {
@@ -107,13 +105,12 @@ macro_rules! default_impl {
                 std::result::Result::Ok((input, <$t>::from_le_bytes(data)))
             }
         }
-        impl $crate::parse_serialize::Serialize for $t {
-            fn serialize_to(
-                &self,
-                target: &mut Vec<u8>,
-            ) -> $crate::parse_serialize::SerializeResult<()> {
-                target.extend(&self.clone().to_le_bytes());
-                std::result::Result::Ok(())
+        impl<W: Write> $crate::parse_serialize::Serialize<W> for $t {
+            fn serialize(
+                self,
+                ctx: WriteContext<W>
+            ) -> GenResult<W> {
+                cookie_factory::combinator::slice(&self.to_le_bytes())(ctx)
             }
         }
     };
@@ -129,6 +126,43 @@ default_impl!(i16);
 default_impl!(i32);
 default_impl!(i64);
 default_impl!(i128);
+
+impl<W: Write> Serialize<W> for bool {
+    fn serialize(self, ctx: WriteContext<W>) -> GenResult<W> {
+        (self as u8).serialize(ctx)
+    }
+}
+
+impl Deserialize for bool {
+    fn deserialize(input: &[u8]) -> DeserializeResult<bool> {
+        nom::combinator::map(u8::deserialize, |v: u8| v > 0)(input)
+    }
+}
+
+#[impl_for_tuples(10)]
+impl<W: Write> Serialize<W> for Tuple {
+    fn serialize(self, ctx: WriteContext<W>) -> GenResult<W> {
+        for_tuples!( #( let ctx = Tuple.serialize(ctx)?; )* );
+        Ok(ctx)
+    }
+}
+
+#[test]
+fn test_simple_serialize() {
+    let input = (1 as u8, 2 as u16, 3 as u32, 4 as u64, true as bool, false as bool);
+    let expected_output = vec![
+        1,
+        2,0,
+        3,0,0,0,
+        4,0,0,0,0,0,0,0,
+        1,
+        0,
+    ];
+    let mut output = Vec::new();
+    cookie_factory::gen(move |ctx| input.serialize(ctx), &mut output).unwrap();
+    assert_eq!(output, expected_output);
+}
+/*
 
 #[macro_export]
 macro_rules! default_serialization_enum {
@@ -155,84 +189,4 @@ macro_rules! default_serialization_enum {
         }
     };
 }
-
-impl Serialize for bool {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        (*self as u8).serialize_to(target)
-    }
-}
-
-impl Deserialize for bool {
-    fn deserialize(input: &[u8]) -> DeserializeResult<bool> {
-        nom::combinator::map(u8::deserialize, |v: u8| v > 0)(input)
-    }
-}
-
-impl<T: Serialize> Serialize for &T {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        (*self).serialize_to(target)
-    }
-}
-
-// TODO: Macro-ify deze
-impl<T1: Deserialize, T2: Deserialize> Deserialize for (T1, T2) {
-    fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2)> {
-        nom::sequence::tuple((T1::deserialize, T2::deserialize))(input)
-    }
-}
-impl<T1: Deserialize, T2: Deserialize, T3: Deserialize> Deserialize for (T1, T2, T3) {
-    fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2, T3)> {
-        nom::sequence::tuple((T1::deserialize, T2::deserialize, T3::deserialize))(input)
-    }
-}
-impl<T1: Deserialize, T2: Deserialize, T3: Deserialize, T4: Deserialize> Deserialize
-    for (T1, T2, T3, T4)
-{
-    fn deserialize(input: &[u8]) -> DeserializeResult<(T1, T2, T3, T4)> {
-        nom::sequence::tuple((
-            T1::deserialize,
-            T2::deserialize,
-            T3::deserialize,
-            T4::deserialize,
-        ))(input)
-    }
-}
-
-impl<T1: Serialize, T2: Serialize> Serialize for (T1, T2) {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        self.0.serialize_to(target)?;
-        self.1.serialize_to(target)?;
-        Ok(())
-    }
-}
-impl<T1: Serialize, T2: Serialize, T3: Serialize> Serialize for (T1, T2, T3) {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        self.0.serialize_to(target)?;
-        self.1.serialize_to(target)?;
-        self.2.serialize_to(target)?;
-        Ok(())
-    }
-}
-
-impl<T1: Serialize, T2: Serialize, T3: Serialize, T4: Serialize> Serialize for (T1, T2, T3, T4) {
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        self.0.serialize_to(target)?;
-        self.1.serialize_to(target)?;
-        self.2.serialize_to(target)?;
-        self.3.serialize_to(target)?;
-        Ok(())
-    }
-}
-
-impl<T1: Serialize, T2: Serialize, T3: Serialize, T4: Serialize, T5: Serialize> Serialize
-    for (T1, T2, T3, T4, T5)
-{
-    fn serialize_to(&self, target: &mut Vec<u8>) -> SerializeResult<()> {
-        self.0.serialize_to(target)?;
-        self.1.serialize_to(target)?;
-        self.2.serialize_to(target)?;
-        self.3.serialize_to(target)?;
-        self.4.serialize_to(target)?;
-        Ok(())
-    }
-}
+*/
