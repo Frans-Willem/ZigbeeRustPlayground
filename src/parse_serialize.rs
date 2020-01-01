@@ -210,8 +210,8 @@ fn test_simple_enum_derive() {
     test_simple_serialization_roundtrip(Test8::A, vec![12]);
     test_simple_serialization_roundtrip(Test8::B, vec![34]);
     test_simple_serialization_roundtrip(Test8::C, vec![56]);
-
 }
+
 /*
 
 #[macro_export]
