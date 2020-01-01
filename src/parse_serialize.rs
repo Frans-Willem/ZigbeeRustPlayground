@@ -207,10 +207,46 @@ fn test_simple_enum_derive() {
         #[serialize_tag(56)]
         C,
     }
+    #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+    #[serialize_tag_type(u32)]
+    enum Test32 {
+        A = 12,
+        B = 34,
+        #[serialize_tag(56)]
+        C,
+    }
     test_simple_serialization_roundtrip(Test8::A, vec![12]);
     test_simple_serialization_roundtrip(Test8::B, vec![34]);
     test_simple_serialization_roundtrip(Test8::C, vec![56]);
+    test_simple_serialization_roundtrip(Test32::A, vec![12, 0, 0, 0]);
+    test_simple_serialization_roundtrip(Test32::B, vec![34, 0, 0, 0]);
+    test_simple_serialization_roundtrip(Test32::C, vec![56, 0, 0, 0]);
 }
+
+#[test]
+fn test_data_enum_derive() {
+	#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+	#[serialize_tag_type(u16)]
+	enum Test {
+		#[serialize_tag(12)]
+		A(u8),
+		#[serialize_tag(34)]
+		B(u16, u32),
+		#[serialize_tag(56)]
+		C {
+			a: u8,
+		},
+		#[serialize_tag(78)]
+		D {
+			a: u16,
+			b: u32
+		},
+	}
+	test_simple_serialization_roundtrip(Test::A(10), vec![12, 0, 10]);
+	test_simple_serialization_roundtrip(Test::B(10, 20), vec![34, 0, 10, 0, 20, 0, 0, 0]);
+	test_simple_serialization_roundtrip(Test::C { a : 10 } , vec![56, 0, 10]);
+	test_simple_serialization_roundtrip(Test::D { a: 10, b: 20 }, vec![78, 0, 10, 0, 20, 0, 0,  0]);
+} 
 
 /*
 

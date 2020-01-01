@@ -25,7 +25,7 @@ fn find_simple_attribute<'a, T: syn::parse::Parse>(
         .find(|attr| match_path(&attr.path, name))
         .ok_or(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "Attribute not found",
+            format!("Attribute '{}' not found", name),
         ))?;
     found.parse_args()
 }
