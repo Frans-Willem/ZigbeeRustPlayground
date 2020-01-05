@@ -142,6 +142,33 @@ impl Deserialize for bool {
     }
 }
 
+impl<T> Tagged for Option<T> {
+    type TagType = bool;
+    fn get_tag(&self) -> SerializeResult<Self::TagType> {
+        Ok(self.is_some())
+    }
+}
+
+impl<T: Serialize> SerializeTagged for Option<T> {
+    fn serialize_data<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W> {
+        match self {
+            Some(x) => x.serialize(ctx),
+            None => Ok(ctx),
+        }
+    }
+}
+
+impl<T: Deserialize> DeserializeTagged for Option<T> {
+    fn deserialize_data(tag: bool, input: &[u8]) -> DeserializeResult<Self> {
+        if tag {
+            let (input, inner) = T::deserialize(input)?;
+            Ok((input, Some(inner)))
+        } else {
+            Ok((input, None))
+        }
+    }
+}
+
 #[impl_for_tuples(10)]
 impl Serialize for Tuple {
     fn serialize<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W> {
