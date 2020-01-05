@@ -29,27 +29,29 @@ fn gen_ignored_names() -> impl Iterator<Item = syn::Ident> {
 fn match_path(path: &syn::Path, name: &str) -> bool {
     if path.leading_colon.is_none() && path.segments.len() == 1 {
         if let Some(segment) = path.segments.first() {
-            return segment.ident.to_string() == name;
+            return segment.ident == name;
         }
     }
     false
 }
 
-fn find_simple_attribute<'a, T: syn::parse::Parse>(
-    attrs: &'a Vec<syn::Attribute>,
+fn find_simple_attribute<T: syn::parse::Parse>(
+    attrs: &[syn::Attribute],
     name: &str,
 ) -> syn::Result<T> {
     let found = attrs
         .iter()
         .find(|attr| match_path(&attr.path, name))
-        .ok_or(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            format!("Attribute '{}' not found", name),
-        ))?;
+        .ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("Attribute '{}' not found", name),
+            )
+        })?;
     found.parse_args()
 }
 
-fn get_serialize_tag_type(attributes: &Vec<syn::Attribute>) -> syn::Result<syn::Type> {
+fn get_serialize_tag_type(attributes: &[syn::Attribute]) -> syn::Result<syn::Type> {
     find_simple_attribute(attributes, "serialize_tag_type")
 }
 
@@ -175,7 +177,7 @@ fn impl_deserialize_struct_macro(name: &syn::Ident, fields: &syn::Fields) -> Tok
 
 fn impl_serialize_enum_macro(
     name: &syn::Ident,
-    attributes: &Vec<syn::Attribute>,
+    attributes: &[syn::Attribute],
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type: syn::Type = find_simple_attribute(attributes, "serialize_tag_type").unwrap();
@@ -189,15 +191,14 @@ fn impl_serialize_enum_macro(
             };
             let (deconstruct, names) =
                 deconstruct_from_enum_variant(name, variant, gen_temporary_names());
-            let ret: syn::Arm = syn::parse_quote! {
+            syn::parse_quote! {
                 #deconstruct => {
                                         let tag : #tag_type = #tag;
                                         let ctx = tag.serialize(ctx)?;
                                         #( let ctx = #names.serialize(ctx)?; )*
                     Ok(ctx)
                 }
-            };
-            return ret;
+            }
         })
         .collect();
 
@@ -214,7 +215,7 @@ fn impl_serialize_enum_macro(
 
 fn impl_deserialize_enum_macro(
     name: &syn::Ident,
-    attributes: &Vec<syn::Attribute>,
+    attributes: &[syn::Attribute],
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type: syn::Type = find_simple_attribute(attributes, "serialize_tag_type").unwrap();
@@ -224,13 +225,12 @@ fn impl_deserialize_enum_macro(
             let tag = get_serialize_tag_pat(variant).unwrap();
             let (construct, types, names) =
                 construct_from_enum_variant(name, variant, gen_temporary_names());
-            let ret: syn::Arm = syn::parse_quote! {
+            syn::parse_quote! {
                 #tag => {
                     #( let (input, #names) = #types::deserialize(input)?; )*
                     Ok((input, #construct ))
                 }
-            };
-            return ret;
+            }
         })
         .collect();
     quote! {
@@ -248,7 +248,7 @@ fn impl_deserialize_enum_macro(
 
 fn impl_tagged_enum_macro(
     name: &syn::Ident,
-    attributes: &Vec<syn::Attribute>,
+    attributes: &[syn::Attribute],
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type = get_serialize_tag_type(attributes).unwrap();
@@ -258,13 +258,12 @@ fn impl_tagged_enum_macro(
             let tag = get_serialize_tag_expr(variant).unwrap();
             let (deconstruct, _) =
                 deconstruct_from_enum_variant(name, variant, gen_ignored_names());
-            let ret: syn::Arm = syn::parse_quote! {
+            syn::parse_quote! {
                 #deconstruct => {
                     let tag : #tag_type = #tag;
                     Ok(tag)
                 }
-            };
-            return ret;
+            }
         })
         .collect();
 
@@ -290,13 +289,12 @@ fn impl_serialize_tagged_enum_macro(
         .map(|variant| {
             let (deconstruct, names) =
                 deconstruct_from_enum_variant(name, variant, gen_temporary_names());
-            let ret: syn::Arm = syn::parse_quote! {
+            syn::parse_quote! {
                 #deconstruct => {
                     #( let ctx = #names.serialize(ctx)?; )*
                     Ok(ctx)
                 }
-            };
-            return ret;
+            }
         })
         .collect();
 
@@ -313,7 +311,7 @@ fn impl_serialize_tagged_enum_macro(
 
 fn impl_deserialize_tagged_enum_macro(
     name: &syn::Ident,
-    attributes: &Vec<syn::Attribute>,
+    attributes: &[syn::Attribute],
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type = get_serialize_tag_type(attributes).unwrap();
@@ -323,13 +321,12 @@ fn impl_deserialize_tagged_enum_macro(
             let tag = get_serialize_tag_pat(variant).unwrap();
             let (construct, types, names) =
                 construct_from_enum_variant(name, variant, gen_temporary_names());
-            let ret: syn::Arm = syn::parse_quote! {
+            syn::parse_quote! {
                 #tag => {
                     #( let (input, #names) = #types::deserialize(input)?; )*
                     Ok((input, #construct))
                 }
-            };
-            return ret;
+            }
         })
         .collect();
 
