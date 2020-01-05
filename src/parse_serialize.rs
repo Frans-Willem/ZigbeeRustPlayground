@@ -278,6 +278,7 @@ fn test_enum_serialize_tagged() {
         A,
         B,
         C,
+        D,
     }
     #[derive(PartialEq, Eq, Debug, Tagged, SerializeTagged)]
     #[serialize_tag_type(TestTag)]
@@ -307,6 +308,7 @@ fn test_enum_deserialize_tagged() {
         A,
         B,
         C,
+        D,
     }
     #[derive(PartialEq, Eq, Debug, Tagged, DeserializeTagged)]
     #[serialize_tag_type(TestTag)]
@@ -331,6 +333,10 @@ fn test_enum_deserialize_tagged() {
         Test::deserialize_data(TestTag::C, &[0x01, 0x02, 0x03, 0x04])
             .unwrap()
             .1
+    );
+    assert_eq!(
+        false,
+        Test::deserialize_data(TestTag::D, &[1, 2, 3, 4, 5]).is_ok()
     );
 }
 

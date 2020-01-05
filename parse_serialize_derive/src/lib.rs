@@ -238,7 +238,7 @@ fn impl_deserialize_enum_macro(
             fn deserialize(input: &[u8]) -> crate::parse_serialize::DeserializeResult<Self> {
                 let (input, tag) = #tag_type ::deserialize(input)?;
                 match tag {
-                                        #( #arms , )*
+                    #( #arms , )*
                     _ => std::convert::Into::into(crate::parse_serialize::DeserializeError::unexpected_data(input))
                 }
             }
@@ -273,9 +273,9 @@ fn impl_tagged_enum_macro(
             type TagType = #tag_type;
 
             fn get_tag(&self) -> crate::parse_serialize::SerializeResult<Self::TagType> {
-                                match self {
-                                    #( #arms ),*
-                                }
+                match self {
+                    #( #arms ),*
+                }
             }
         }
     }
@@ -292,7 +292,7 @@ fn impl_serialize_tagged_enum_macro(
                 deconstruct_from_enum_variant(name, variant, gen_temporary_names());
             let ret: syn::Arm = syn::parse_quote! {
                 #deconstruct => {
-                                        #( let ctx = #names.serialize(ctx)?; )*
+                    #( let ctx = #names.serialize(ctx)?; )*
                     Ok(ctx)
                 }
             };
@@ -303,9 +303,9 @@ fn impl_serialize_tagged_enum_macro(
     quote! {
         impl crate::parse_serialize::SerializeTagged for #name {
             fn serialize_data<W: std::io::Write>(&self, ctx: cookie_factory::WriteContext<W>) -> cookie_factory::GenResult<W> {
-                                match self {
-                                    #( #arms ),*
-                                }
+                match self {
+                    #( #arms ),*
+                }
             }
         }
     }
@@ -336,9 +336,10 @@ fn impl_deserialize_tagged_enum_macro(
     quote! {
         impl crate::parse_serialize::DeserializeTagged for #name {
             fn deserialize_data(tag: #tag_type, input: &[u8]) -> crate::parse_serialize::DeserializeResult<Self> {
-                                match tag {
-                                    #( #arms ),*
-                                }
+                match tag {
+                    #( #arms ),*
+                    _ => std::convert::Into::into(crate::parse_serialize::DeserializeError::unexpected_data(input))
+                }
             }
         }
     }
