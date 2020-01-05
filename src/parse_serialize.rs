@@ -1,7 +1,9 @@
 use cookie_factory::{GenResult, WriteContext};
-pub use parse_serialize_derive::{Deserialize, Serialize, Tagged};
 use impl_trait_for_tuples::impl_for_tuples;
 use nom::IResult;
+pub use parse_serialize_derive::{
+    Deserialize, DeserializeTagged, Serialize, SerializeTagged, Tagged,
+};
 use std::io::Write;
 
 #[derive(Debug)]
@@ -90,14 +92,13 @@ pub trait Tagged {
     fn get_tag(&self) -> SerializeResult<Self::TagType>;
 }
 
-pub trait SerializeTagged : Tagged {
+pub trait SerializeTagged: Tagged {
     fn serialize_data<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W>;
 }
 
 pub trait DeserializeTagged: Tagged + Sized {
     fn deserialize_data(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
 }
-
 
 /* Default implementations */
 macro_rules! default_impl {
@@ -230,28 +231,24 @@ fn test_simple_enum_derive() {
 
 #[test]
 fn test_data_enum_derive() {
-	#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
-	#[serialize_tag_type(u16)]
-	enum Test {
-		#[serialize_tag(12)]
-		A(u8),
-		#[serialize_tag(34)]
-		B(u16, u32),
-		#[serialize_tag(56)]
-		C {
-			a: u8,
-		},
-		#[serialize_tag(78)]
-		D {
-			a: u16,
-			b: u32
-		},
-	}
-	test_simple_serialization_roundtrip(Test::A(10), vec![12, 0, 10]);
-	test_simple_serialization_roundtrip(Test::B(10, 20), vec![34, 0, 10, 0, 20, 0, 0, 0]);
-	test_simple_serialization_roundtrip(Test::C { a : 10 } , vec![56, 0, 10]);
-	test_simple_serialization_roundtrip(Test::D { a: 10, b: 20 }, vec![78, 0, 10, 0, 20, 0, 0,  0]);
-} 
+    #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+    #[serialize_tag_type(u16)]
+    enum Test {
+        #[serialize_tag(12)]
+        A(u8),
+        #[serialize_tag(34)]
+        B(u16, u32),
+        #[serialize_tag(56)]
+        C { a: u8 },
+        #[serialize_tag(78)]
+        D { a: u16, b: u32 },
+    }
+    test_simple_serialization_roundtrip(Test::A(10), vec![12, 0, 10]);
+    test_simple_serialization_roundtrip(Test::B(10, 20), vec![34, 0, 10, 0, 20, 0, 0, 0]);
+    test_simple_serialization_roundtrip(Test::C { a: 10 }, vec![56, 0, 10]);
+    test_simple_serialization_roundtrip(Test::D { a: 10, b: 20 }, vec![78, 0, 10, 0, 20, 0, 0, 0]);
+}
+
 #[test]
 fn test_enum_get_tag() {
     #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -274,7 +271,68 @@ fn test_enum_get_tag() {
     assert_eq!(Test::B(12).get_tag().unwrap(), TestTag::B);
     assert_eq!(Test::C(12).get_tag().unwrap(), TestTag::C);
 }
+#[test]
+fn test_enum_serialize_tagged() {
+    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+    enum TestTag {
+        A,
+        B,
+        C,
+    }
+    #[derive(PartialEq, Eq, Debug, Tagged, SerializeTagged)]
+    #[serialize_tag_type(TestTag)]
+    enum Test {
+        #[serialize_tag(TestTag::A)]
+        A(u8),
+        #[serialize_tag(TestTag::B)]
+        B(u16),
+        #[serialize_tag(TestTag::C)]
+        C(u32),
+    }
+    let mut serialized = Vec::new();
+    cookie_factory::gen(move |ctx| Test::A(12).serialize_data(ctx), &mut serialized).unwrap();
+    assert_eq!(serialized, vec![12]);
+    let mut serialized = Vec::new();
+    cookie_factory::gen(move |ctx| Test::B(12).serialize_data(ctx), &mut serialized).unwrap();
+    assert_eq!(serialized, vec![12, 0]);
+    let mut serialized = Vec::new();
+    cookie_factory::gen(move |ctx| Test::C(12).serialize_data(ctx), &mut serialized).unwrap();
+    assert_eq!(serialized, vec![12, 0, 0, 0]);
+}
 
+#[test]
+fn test_enum_deserialize_tagged() {
+    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+    enum TestTag {
+        A,
+        B,
+        C,
+    }
+    #[derive(PartialEq, Eq, Debug, Tagged, DeserializeTagged)]
+    #[serialize_tag_type(TestTag)]
+    enum Test {
+        #[serialize_tag(TestTag::A)]
+        A(u8),
+        #[serialize_tag(TestTag::B)]
+        B(u16),
+        #[serialize_tag(TestTag::C)]
+        C(u32),
+    }
+    assert_eq!(
+        Test::A(12),
+        Test::deserialize_data(TestTag::A, &[12]).unwrap().1
+    );
+    assert_eq!(
+        Test::B(0x0201),
+        Test::deserialize_data(TestTag::B, &[0x01, 0x02]).unwrap().1
+    );
+    assert_eq!(
+        Test::C(0x04030201),
+        Test::deserialize_data(TestTag::C, &[0x01, 0x02, 0x03, 0x04])
+            .unwrap()
+            .1
+    );
+}
 
 /*
 

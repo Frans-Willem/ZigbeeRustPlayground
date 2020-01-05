@@ -2,7 +2,7 @@
  * Creates a construct expression for an enum variant,
  * and returns types & expected identifiers of arguments.
  */
-pub fn construct_from_enum_variant<N : Iterator<Item = syn::Ident>> (
+pub fn construct_from_enum_variant<N: Iterator<Item = syn::Ident>>(
     enum_name: &syn::Ident,
     variant: &syn::Variant,
     namegen: N,
@@ -15,7 +15,7 @@ pub fn construct_from_enum_variant<N : Iterator<Item = syn::Ident>> (
     )
 }
 
-pub fn construct_from_fields<N : Iterator<Item = syn::Ident>>(
+pub fn construct_from_fields<N: Iterator<Item = syn::Ident>>(
     constructor_path: &syn::Path,
     fields: &syn::Fields,
     namegen: N,
@@ -31,7 +31,7 @@ pub fn construct_from_fields<N : Iterator<Item = syn::Ident>>(
     }
 }
 
-pub fn construct_from_named_fields<N : Iterator<Item = syn::Ident>>(
+pub fn construct_from_named_fields<N: Iterator<Item = syn::Ident>>(
     constructor_path: &syn::Path,
     fields: &syn::FieldsNamed,
     namegen: N,
@@ -46,7 +46,7 @@ pub fn construct_from_named_fields<N : Iterator<Item = syn::Ident>>(
     )
 }
 
-pub fn construct_from_unnamed_fields<N : Iterator<Item = syn::Ident>>(
+pub fn construct_from_unnamed_fields<N: Iterator<Item = syn::Ident>>(
     constructor_path: &syn::Path,
     fields: &syn::FieldsUnnamed,
     namegen: N,
