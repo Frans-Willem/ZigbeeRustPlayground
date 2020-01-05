@@ -1,7 +1,7 @@
 extern crate proc_macro;
 extern crate proc_macro2;
 
-use crate::proc_macro2::{Literal, TokenStream, TokenTree};
+use crate::proc_macro2::TokenStream;
 use quote::quote;
 use quote::ToTokens;
 use syn;

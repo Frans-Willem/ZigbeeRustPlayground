@@ -1,5 +1,5 @@
 [package]
-name = "derives"
+name = "parse-serialize-derive"
 version = "0.1.0"
 authors = ["Frans-Willem Hardijzer <fw@hardijzer.nl>"]
 edition = "2018"

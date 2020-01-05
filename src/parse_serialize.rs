@@ -1,5 +1,5 @@
 use cookie_factory::{GenResult, WriteContext};
-pub use derives::{Deserialize, Serialize};
+pub use parse_serialize_derive::{Deserialize, Serialize};
 use impl_trait_for_tuples::impl_for_tuples;
 use nom::IResult;
 use std::io::Write;
