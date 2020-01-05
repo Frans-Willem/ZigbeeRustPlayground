@@ -1,5 +1,5 @@
 use cookie_factory::{GenResult, WriteContext};
-pub use parse_serialize_derive::{Deserialize, Serialize};
+pub use parse_serialize_derive::{Deserialize, Serialize, Tagged};
 use impl_trait_for_tuples::impl_for_tuples;
 use nom::IResult;
 use std::io::Write;
@@ -79,20 +79,25 @@ pub trait Deserialize: Sized {
     }
 }
 
-pub trait DeserializeTagged: SerializeTagged + Sized {
-    fn deserialize(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
-}
-
 pub type SerializeResult<T> = std::result::Result<T, SerializeError>;
 
-pub trait Serialize: Sized {
+pub trait Serialize {
     fn serialize<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W>;
 }
 
-pub trait SerializeTagged {
+pub trait Tagged {
     type TagType: Copy;
-    fn serialize_tag(&self) -> SerializeResult<Self::TagType>;
+    fn get_tag(&self) -> SerializeResult<Self::TagType>;
 }
+
+pub trait SerializeTagged : Tagged {
+    fn serialize_data<W: Write>(&self, ctx: WriteContext<W>) -> GenResult<W>;
+}
+
+pub trait DeserializeTagged: Tagged + Sized {
+    fn deserialize_data(tag: Self::TagType, input: &[u8]) -> DeserializeResult<Self>;
+}
+
 
 /* Default implementations */
 macro_rules! default_impl {
@@ -247,6 +252,29 @@ fn test_data_enum_derive() {
 	test_simple_serialization_roundtrip(Test::C { a : 10 } , vec![56, 0, 10]);
 	test_simple_serialization_roundtrip(Test::D { a: 10, b: 20 }, vec![78, 0, 10, 0, 20, 0, 0,  0]);
 } 
+#[test]
+fn test_enum_get_tag() {
+    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+    enum TestTag {
+        A,
+        B,
+        C,
+    }
+    #[derive(PartialEq, Eq, Debug, Tagged)]
+    #[serialize_tag_type(TestTag)]
+    enum Test {
+        #[serialize_tag(TestTag::A)]
+        A(u8),
+        #[serialize_tag(TestTag::B)]
+        B(u16),
+        #[serialize_tag(TestTag::C)]
+        C(u32),
+    }
+    assert_eq!(Test::A(12).get_tag().unwrap(), TestTag::A);
+    assert_eq!(Test::B(12).get_tag().unwrap(), TestTag::B);
+    assert_eq!(Test::C(12).get_tag().unwrap(), TestTag::C);
+}
+
 
 /*
 
