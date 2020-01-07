@@ -1,11 +1,6 @@
-use crate::pack::{
-    Pack, PackError, PackTagged, SlicePackError, SlicePackTarget, VecPackError, VecPackTarget,
-};
+use crate::pack::{Pack, PackError, PackTagged, SlicePackError, SlicePackTarget, VecPackTarget};
 
-fn test_roundtrip<T: core::fmt::Debug + Eq + PartialEq + Pack<PackError<VecPackError>>>(
-    input: T,
-    packed: Vec<u8>,
-) {
+fn test_roundtrip<T: core::fmt::Debug + Eq + PartialEq + Pack>(input: T, packed: Vec<u8>) {
     let (unpacked, remaining) = T::unpack(&packed).unwrap();
     assert!(remaining.is_empty());
     assert_eq!(unpacked, input);
@@ -125,7 +120,7 @@ fn test_data_enum() {
     test_roundtrip(Test::D { a: 10, b: 20 }, vec![78, 0, 10, 0, 20, 0, 0, 0]);
 }
 
-fn test_roundtrip_tag<T: core::fmt::Debug + Eq + PartialEq + PackTagged<PackError<VecPackError>>>(
+fn test_roundtrip_tag<T: core::fmt::Debug + Eq + PartialEq + PackTagged>(
     input: T,
     tag: T::Tag,
     packed: Vec<u8>,

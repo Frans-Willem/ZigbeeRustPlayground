@@ -2,44 +2,45 @@ use crate::pack::{ExtEnumError, PackTarget};
 use impl_trait_for_tuples::impl_for_tuples;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum PackError<T> {
+pub enum UnpackError {
     NotEnoughData,  // Only valid for unpacking, not enough data available.
     InvalidEnumTag, // Invalid enum tag
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PackError<T> {
+    NotAllowed, // In case the packing is not allowed. e.g. attempting to pack a list of more than 255 items where the packing has a length prefix of 8 bits.
     TargetError(T), // Wraps around PackTarget::Error
 }
 
-impl<T> Into<PackError<T>> for ExtEnumError {
-    fn into(self) -> PackError<T> {
+impl Into<UnpackError> for ExtEnumError {
+    fn into(self) -> UnpackError {
         match self {
-            ExtEnumError::InvalidTag => PackError::InvalidEnumTag,
+            ExtEnumError::InvalidTag => UnpackError::InvalidEnumTag,
         }
     }
 }
 
-pub trait Pack<ErrType>: Sized {
-    fn unpack(data: &[u8]) -> Result<(Self, &[u8]), ErrType>;
-    fn pack<T: PackTarget>(&self, target: T) -> Result<T, ErrType>
-    where
-        T::Error: Into<ErrType>;
+pub trait Pack: Sized {
+    fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError>;
+    fn pack<T: PackTarget>(&self, target: T) -> Result<T, PackError<T::Error>>;
 }
 
-pub trait PackTagged<ErrType>: Sized {
+pub trait PackTagged: Sized {
     type Tag;
     fn get_tag(&self) -> Self::Tag;
-    fn unpack_data(tag: Self::Tag, data: &[u8]) -> Result<(Self, &[u8]), ErrType>;
-    fn pack_data<T: PackTarget>(&self, target: T) -> Result<T, ErrType>
-    where
-        T::Error: Into<ErrType>;
+    fn unpack_data(tag: Self::Tag, data: &[u8]) -> Result<(Self, &[u8]), UnpackError>;
+    fn pack_data<T: PackTarget>(&self, target: T) -> Result<T, PackError<T::Error>>;
 }
 
 /* Default implementations */
 macro_rules! default_impl {
     ($t:ty) => {
-        impl<E> $crate::pack::Pack<$crate::pack::PackError<E>> for $t {
-            fn unpack(data: &[u8]) -> Result<(Self, &[u8]), $crate::pack::PackError<E>> {
+        impl $crate::pack::Pack for $t {
+            fn unpack(data: &[u8]) -> Result<(Self, &[u8]), $crate::pack::UnpackError> {
                 let expected_size = core::mem::size_of::<$t>();
                 if data.len() < expected_size {
-                    Err(PackError::NotEnoughData)
+                    Err(UnpackError::NotEnoughData)
                 } else {
                     Ok((
                         <$t>::from_le_bytes(
@@ -52,11 +53,10 @@ macro_rules! default_impl {
             fn pack<T: $crate::pack::PackTarget>(
                 &self,
                 target: T,
-            ) -> Result<T, $crate::pack::PackError<E>>
-            where
-                T::Error: core::convert::Into<$crate::pack::PackError<E>>,
-            {
-                target.append(&(self.to_le_bytes())).map_err(|e| e.into())
+            ) -> Result<T, $crate::pack::PackError<T::Error>> {
+                target
+                    .append(&(self.to_le_bytes()))
+                    .map_err(PackError::TargetError)
             }
         }
     };
@@ -73,43 +73,37 @@ default_impl!(i32);
 default_impl!(i64);
 default_impl!(i128);
 
+impl Pack for bool {
+    fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
+        let (x, data) = u8::unpack(data)?;
+        Ok((x > 0, data))
+    }
+    fn pack<T: PackTarget>(&self, target: T) -> Result<T, PackError<T::Error>> {
+        (*self as u8).pack(target)
+    }
+}
+
 #[impl_for_tuples(10)]
-impl<ErrType> Pack<ErrType> for Tuple {
-    fn unpack(data: &[u8]) -> Result<(Self, &[u8]), ErrType> {
+impl Pack for Tuple {
+    fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
         for_tuples!( #( let (Tuple, data) = Tuple::unpack(data)?; )* );
         Ok(((for_tuples!( #( Tuple ),* )), data))
     }
-    fn pack<T: PackTarget>(&self, target: T) -> Result<T, ErrType>
-    where
-        T::Error: Into<ErrType>,
-    {
+    fn pack<T: PackTarget>(&self, target: T) -> Result<T, PackError<T::Error>> {
         for_tuples!( #( let target = Tuple.pack(target)?; )* );
         Ok(target)
     }
 }
 
-impl<E> Pack<PackError<E>> for bool {
-    fn unpack(data: &[u8]) -> Result<(Self, &[u8]), PackError<E>> {
-        let (x, data) = u8::unpack(data)?;
-        Ok((x > 0, data))
-    }
-    fn pack<T: PackTarget>(&self, target: T) -> Result<T, PackError<E>>
-    where
-        T::Error: Into<PackError<E>>,
-    {
-        (*self as u8).pack(target)
-    }
-}
-
-impl<T, E> PackTagged<E> for Option<T>
+impl<T> PackTagged for Option<T>
 where
-    T: Pack<E>,
+    T: Pack,
 {
     type Tag = bool;
     fn get_tag(&self) -> bool {
         self.is_some()
     }
-    fn unpack_data(tag: bool, data: &[u8]) -> Result<(Self, &[u8]), E> {
+    fn unpack_data(tag: bool, data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
         if tag {
             let (inner, data) = T::unpack(data)?;
             Ok((Some(inner), data))
@@ -117,10 +111,7 @@ where
             Ok((None, data))
         }
     }
-    fn pack_data<TA: PackTarget>(&self, target: TA) -> Result<TA, E>
-    where
-        TA::Error: Into<E>,
-    {
+    fn pack_data<TA: PackTarget>(&self, target: TA) -> Result<TA, PackError<TA::Error>> {
         match self {
             Some(inner) => inner.pack(target),
             None => Ok(target),

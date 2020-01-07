@@ -1,4 +1,4 @@
-use crate::pack::{PackError, PackTarget};
+use crate::pack::PackTarget;
 
 pub struct SlicePackTarget<'lifetime>(&'lifetime mut [u8], usize);
 
@@ -7,11 +7,6 @@ pub enum SlicePackError {
     NotEnoughSpace,
 }
 
-impl Into<PackError<SlicePackError>> for SlicePackError {
-    fn into(self) -> PackError<SlicePackError> {
-        PackError::TargetError(self)
-    }
-}
 impl<'lifetime> PackTarget for SlicePackTarget<'lifetime> {
     type Error = SlicePackError;
     fn append(self, data: &[u8]) -> Result<Self, Self::Error> {

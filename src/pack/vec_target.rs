@@ -1,15 +1,9 @@
-use crate::pack::{PackError, PackTarget};
+use crate::pack::PackTarget;
 
 pub struct VecPackTarget(Vec<u8>);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum VecPackError {}
-
-impl Into<PackError<VecPackError>> for VecPackError {
-    fn into(self) -> PackError<VecPackError> {
-        PackError::TargetError(self)
-    }
-}
 
 impl PackTarget for VecPackTarget {
     type Error = VecPackError;

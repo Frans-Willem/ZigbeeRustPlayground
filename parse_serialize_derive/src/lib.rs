@@ -106,17 +106,15 @@ fn impl_pack_for_struct(name: &syn::Ident, fields: &syn::Fields) -> TokenStream 
         deconstruct_from_fields(&syn::parse_quote! { #name }, fields, gen_temporary_names());
     let subtypes = &construct_types;
     quote! {
-        impl<E> crate::pack::Pack<E> for #name
+        impl crate::pack::Pack for #name
             where
-                #( #subtypes : crate::pack::Pack<E>, )*
+                #( #subtypes : crate::pack::Pack, )*
         {
-            fn unpack(data: &[u8]) -> core::result::Result<(Self, &[u8]), E> {
+            fn unpack(data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::UnpackError> {
                 #( let ( #construct_names, data) = #construct_types::unpack(data)?; )*
                 Ok((#construct_expr, data))
             }
-            fn pack<T: crate::pack::PackTarget>(&self, target: T) -> core::result::Result<T, E>
-            where
-                T::Error: Into<E>,
+            fn pack<T: crate::pack::PackTarget>(&self, target: T) -> core::result::Result<T, crate::pack::PackError<T::Error>>
             {
                 let #deconstruct_pat = self;
                 #( let target = #deconstruct_names.pack(target)?; )*
@@ -169,20 +167,18 @@ fn impl_pack_for_enum(
         .collect();
     let contained_types = contained_types.into_iter();
     quote! {
-        impl<E> crate::pack::Pack<crate::pack::PackError<E>> for #name
+        impl crate::pack::Pack for #name
             where
-                #( #contained_types : crate::pack::Pack<crate::pack::PackError<E>>, )*
+                #( #contained_types : crate::pack::Pack, )*
         {
-            fn unpack(data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::PackError<E>> {
+            fn unpack(data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::UnpackError> {
                 let (tag, data) = #tag_type::unpack(data)?;
                 match tag {
                     #( #unpack_arms, )*
-                    _ => Err(crate::pack::PackError::InvalidEnumTag),
+                    _ => Err(crate::pack::UnpackError::InvalidEnumTag),
                 }
             }
-            fn pack<T: crate::pack::PackTarget>(&self, target: T) -> core::result::Result<T, crate::pack::PackError<E>>
-            where
-                T::Error: Into<PackError<E>>,
+            fn pack<T: crate::pack::PackTarget>(&self, target: T) -> core::result::Result<T, crate::pack::PackError<T::Error>>
             {
                 match self {
                     #( #pack_arms, )*
@@ -245,9 +241,9 @@ fn impl_pack_tagged_for_enum(
         .collect();
     let contained_types = contained_types.into_iter();
     quote! {
-        impl<E> crate::pack::PackTagged<crate::pack::PackError<E>> for #name
+        impl crate::pack::PackTagged for #name
             where
-                #( #contained_types : crate::pack::Pack<crate::pack::PackError<E>>, )*
+                #( #contained_types : crate::pack::Pack, )*
         {
             type Tag = #tag_type;
             fn get_tag(&self) -> Self::Tag {
@@ -255,15 +251,13 @@ fn impl_pack_tagged_for_enum(
                     #( #tag_arms, )*
                 }
             }
-            fn unpack_data(tag: Self::Tag, data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::PackError<E>> {
+            fn unpack_data(tag: Self::Tag, data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::UnpackError> {
                 match tag {
                     #( #unpack_arms, )*
-                    _ => Err(crate::pack::PackError::InvalidEnumTag),
+                    _ => Err(crate::pack::UnpackError::InvalidEnumTag),
                 }
             }
-            fn pack_data<T: crate::pack::PackTarget>(&self, target: T) -> core::result::Result<T, crate::pack::PackError<E>>
-            where
-                T::Error: Into<PackError<E>>,
+            fn pack_data<T: crate::pack::PackTarget>(&self, target: T) -> core::result::Result<T, crate::pack::PackError<T::Error>>
             {
                 match self {
                     #( #pack_arms, )*
