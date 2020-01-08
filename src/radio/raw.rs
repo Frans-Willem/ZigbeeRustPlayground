@@ -1,5 +1,4 @@
 use cookie_factory::SerializeFn;
-use enum_tryfrom_derive::TryFromPrimitive;
 use futures::prelude::*;
 use futures::ready;
 use pin_project::pin_project;
@@ -7,24 +6,25 @@ use std::convert::TryFrom;
 use std::io::Write;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use crate::pack::ExtEnum;
 
 static RADIO_MAGIC_PREFIX: &[u8] = b"ZPB";
 
-#[derive(Debug, TryFromPrimitive, Eq, PartialEq, Copy, Clone)]
-#[TryFromPrimitiveType = "u8"]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, ExtEnum)]
+#[tag_type(u8)]
 pub enum RawRadioCommand {
     Prepare = 0,
-    Transmit,
-    Send,
-    ChannelClear,
-    On,
-    Off,
-    GetValue,
-    SetValue,
-    GetObject,
-    SetObject,
-    InitPendingTable,
-    SetPending,
+    Transmit = 1,
+    Send = 2,
+    ChannelClear = 3,
+    On = 4,
+    Off = 5,
+    GetValue = 6,
+    SetValue = 7,
+    GetObject = 8,
+    SetObject = 9,
+    InitPendingTable = 10,
+    SetPending = 11,
     Ok = 0x80,
     Err = 0x81,
     OnPacket = 0xC0,
@@ -68,7 +68,7 @@ pub fn gen_raw_radio_message<'a, W: Write + 'a>(
     };
     cookie_factory::sequence::tuple((
         cookie_factory::combinator::slice(RADIO_MAGIC_PREFIX),
-        cookie_factory::bytes::be_u8(msg.command_id as u8),
+        cookie_factory::bytes::be_u8(msg.command_id.into()),
         cookie_factory::bytes::be_u16(msg.request_id),
         cookie_factory::bytes::be_u16(len),
         cookie_factory::combinator::slice(&msg.data[0..len as usize]),
