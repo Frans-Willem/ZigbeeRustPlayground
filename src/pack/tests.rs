@@ -1,4 +1,5 @@
-use crate::pack::{Pack, PackError, PackTagged, SlicePackError, SlicePackTarget, VecPackTarget};
+use crate::pack::{Pack, PackError, PackTagged, SlicePackError, SlicePackTarget, VecPackTarget, ExtEnum, ExtEnumError};
+use core::convert::{Into, TryFrom};
 
 fn test_roundtrip<T: core::fmt::Debug + Eq + PartialEq + Pack>(input: T, packed: Vec<u8>) {
     let (unpacked, remaining) = T::unpack(&packed).unwrap();
@@ -163,4 +164,35 @@ fn test_enum_tagged() {
         TestTag::C,
         vec![0x01, 0x02, 0x03, 0x04],
     );
+}
+
+#[test]
+fn test_ext_enum() {
+    #[derive(PartialEq, Eq, Debug, Clone, Copy, ExtEnum)]
+    #[tag_type(u8)]
+    enum Test {
+        A = 0,
+        B = 1,
+        #[tag(2)]
+        C,
+        D = 3,
+    }
+    assert_eq!(Test::A.into_tag(), 0 as u8);
+    assert_eq!(Test::B.into_tag(), 1 as u8);
+    assert_eq!(Test::C.into_tag(), 2 as u8);
+    assert_eq!(Test::D.into_tag(), 3 as u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::A), 0 as u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::B), 1 as u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::C), 2 as u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::D), 3 as u8);
+    assert_eq!(Test::try_from_tag(0), Ok(Test::A));
+    assert_eq!(Test::try_from_tag(1), Ok(Test::B));
+    assert_eq!(Test::try_from_tag(2), Ok(Test::C));
+    assert_eq!(Test::try_from_tag(3), Ok(Test::D));
+    assert_eq!(Test::try_from_tag(4), Err(ExtEnumError::InvalidTag));
+    assert_eq!(Test::try_from(0 as u8), Ok(Test::A));
+    assert_eq!(Test::try_from(1 as u8), Ok(Test::B));
+    assert_eq!(Test::try_from(2 as u8), Ok(Test::C));
+    assert_eq!(Test::try_from(3 as u8), Ok(Test::D));
+    assert_eq!(Test::try_from(4 as u8), Err(ExtEnumError::InvalidTag));
 }

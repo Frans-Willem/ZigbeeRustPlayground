@@ -84,6 +84,12 @@ pub fn pack_tagged_derive(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     impl_pack_tagged(&ast).into()
 }
 
+#[proc_macro_derive(ExtEnum, attributes(tag, tag_type))]
+pub fn ext_enum_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = parse_macro_input!(input as syn::DeriveInput);
+    impl_ext_enum(&ast).into()
+}
+
 fn impl_pack(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
         syn::Data::Struct(s) => impl_pack_for_struct(&ast.ident, &s.fields),
@@ -95,7 +101,14 @@ fn impl_pack(ast: &syn::DeriveInput) -> TokenStream {
 fn impl_pack_tagged(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
         syn::Data::Enum(e) => impl_pack_tagged_for_enum(&ast.ident, &ast.attrs, &e.variants),
-        _ => panic!("derive(Pack) not (yet) implemented for this type"),
+        _ => panic!("derive(PackTagged) not (yet) implemented for this type"),
+    }
+}
+
+fn impl_ext_enum(ast: &syn::DeriveInput) -> TokenStream {
+    match &ast.data {
+        syn::Data::Enum(e) => impl_ext_enum_for_enum(&ast.ident, &ast.attrs, &e.variants),
+        _ => panic!("derive(ExtEnum) not (yet) implemented for this type"),
     }
 }
 
@@ -262,6 +275,73 @@ fn impl_pack_tagged_for_enum(
                 match self {
                     #( #pack_arms, )*
                 }
+            }
+        }
+    }
+}
+
+fn impl_ext_enum_for_enum(
+    name: &syn::Ident,
+    attributes: &[syn::Attribute],
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
+) -> TokenStream {
+    let tag_type = get_tag_type(attributes).unwrap();
+    let into_tag_arms: Vec<syn::Arm> = variants
+        .iter()
+        .map(|variant| {
+            let tag = get_tag_expr(variant).unwrap();
+            let (deconstruct_pat, _) =
+                deconstruct_from_enum_variant(name, variant, gen_ignored_names());
+            syn::parse_quote! {
+                #deconstruct_pat => {
+                    let tag : #tag_type = #tag;
+                    tag
+                }
+            }
+        })
+        .collect();
+    let from_tag_arms: Vec<syn::Arm> = variants
+        .iter()
+        .map(|variant| {
+            let tag = get_tag_pat(variant).unwrap();
+            let (construct_expr, construct_types, _) =
+                construct_from_enum_variant(name, variant, gen_ignored_names());
+            if construct_types.is_empty() {
+                syn::parse_quote! {
+                    #tag => Ok(#construct_expr)
+                }
+            } else {
+                panic!("ExtEnum can only be derived from enums without data");
+            }
+        })
+        .collect();
+    quote! {
+        impl crate::pack::ExtEnum for #name
+        {
+            type Tag = #tag_type;
+            fn into_tag(&self) -> Self::Tag {
+                match self {
+                    #( #into_tag_arms, )*
+                }
+            }
+            fn try_from_tag(tag: Self::Tag) -> core::result::Result<Self, crate::pack::ExtEnumError> {
+                match tag {
+                    #( #from_tag_arms, )*
+                    _ => Err(crate::pack::ExtEnumError::InvalidTag),
+                }
+            }
+        }
+        impl core::convert::Into<#tag_type> for #name
+        {
+            fn into(self) -> #tag_type {
+                self.into_tag()
+            }
+        }
+        impl core::convert::TryFrom<#tag_type> for #name
+        {
+            type Error = crate::pack::ExtEnumError;
+            fn try_from(tag: #tag_type) -> core::result::Result<Self, Self::Error> {
+                #name::try_from_tag(tag)
             }
         }
     }
