@@ -8,7 +8,7 @@ mod vec_target;
 
 pub use ext_enum::*;
 pub use pack::*;
-pub use parse_serialize_derive::{Pack, PackTagged};
+pub use pack_derive::{Pack, PackTagged, ExtEnum};
 pub use slice_target::*;
 pub use target::*;
 pub use vec_target::*;

@@ -15,5 +15,5 @@ enum-tryfrom = "0.2"
 enum-tryfrom-derive = "0.2"
 snowflake = "1.2"
 rand = "0.7"
-parse-serialize-derive = { path = "./parse_serialize_derive" }
+pack-derive = { path = "./pack_derive" }
 impl-trait-for-tuples = "0.1"
