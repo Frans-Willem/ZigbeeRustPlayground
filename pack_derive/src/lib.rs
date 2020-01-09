@@ -92,36 +92,53 @@ pub fn ext_enum_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
 
 fn impl_pack(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
-        syn::Data::Struct(s) => impl_pack_for_struct(&ast.ident, &s.fields),
-        syn::Data::Enum(e) => impl_pack_for_enum(&ast.ident, &ast.attrs, &e.variants),
+        syn::Data::Struct(s) => impl_pack_for_struct(&ast.ident, &ast.generics, &s.fields),
+        syn::Data::Enum(e) => {
+            impl_pack_for_enum(&ast.ident, &ast.attrs, &ast.generics, &e.variants)
+        }
         _ => panic!("derive(Pack) not (yet) implemented for this type"),
     }
 }
 
 fn impl_pack_tagged(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
-        syn::Data::Enum(e) => impl_pack_tagged_for_enum(&ast.ident, &ast.attrs, &e.variants),
+        syn::Data::Enum(e) => {
+            impl_pack_tagged_for_enum(&ast.ident, &ast.attrs, &ast.generics, &e.variants)
+        }
         _ => panic!("derive(PackTagged) not (yet) implemented for this type"),
     }
 }
 
 fn impl_ext_enum(ast: &syn::DeriveInput) -> TokenStream {
     match &ast.data {
-        syn::Data::Enum(e) => impl_ext_enum_for_enum(&ast.ident, &ast.attrs, &e.variants),
+        syn::Data::Enum(e) => {
+            impl_ext_enum_for_enum(&ast.ident, &ast.attrs, &ast.generics, &e.variants)
+        }
         _ => panic!("derive(ExtEnum) not (yet) implemented for this type"),
     }
 }
 
-fn impl_pack_for_struct(name: &syn::Ident, fields: &syn::Fields) -> TokenStream {
+fn impl_pack_for_struct(
+    name: &syn::Ident,
+    generics: &syn::Generics,
+    fields: &syn::Fields,
+) -> TokenStream {
     let (construct_expr, construct_types, construct_names) =
         construct_from_fields(&syn::parse_quote! { #name }, fields, gen_temporary_names());
     let (deconstruct_pat, deconstruct_names) =
         deconstruct_from_fields(&syn::parse_quote! { #name }, fields, gen_temporary_names());
     let subtypes = &construct_types;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let extra_where = if let Some(where_clause) = where_clause {
+        where_clause.predicates.iter().collect()
+    } else {
+        Vec::new()
+    };
     quote! {
-        impl crate::pack::Pack for #name
+        impl #impl_generics crate::pack::Pack for #name #ty_generics
             where
                 #( #subtypes : crate::pack::Pack, )*
+                #( #extra_where, )*
         {
             fn unpack(data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::UnpackError> {
                 #( let ( #construct_names, data) = #construct_types::unpack(data)?; )*
@@ -140,6 +157,7 @@ fn impl_pack_for_struct(name: &syn::Ident, fields: &syn::Fields) -> TokenStream 
 fn impl_pack_for_enum(
     name: &syn::Ident,
     attributes: &[syn::Attribute],
+    generics: &syn::Generics,
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type = get_tag_type(attributes).unwrap();
@@ -179,10 +197,17 @@ fn impl_pack_for_enum(
         })
         .collect();
     let contained_types = contained_types.into_iter();
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let extra_where = if let Some(where_clause) = where_clause {
+        where_clause.predicates.iter().collect()
+    } else {
+        Vec::new()
+    };
     quote! {
-        impl crate::pack::Pack for #name
+        impl #impl_generics crate::pack::Pack for #name #ty_generics
             where
                 #( #contained_types : crate::pack::Pack, )*
+                #( #extra_where, )*
         {
             fn unpack(data: &[u8]) -> core::result::Result<(Self, &[u8]), crate::pack::UnpackError> {
                 let (tag, data) = #tag_type::unpack(data)?;
@@ -204,6 +229,7 @@ fn impl_pack_for_enum(
 fn impl_pack_tagged_for_enum(
     name: &syn::Ident,
     attributes: &[syn::Attribute],
+    generics: &syn::Generics,
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type = get_tag_type(attributes).unwrap();
@@ -253,10 +279,17 @@ fn impl_pack_tagged_for_enum(
         })
         .collect();
     let contained_types = contained_types.into_iter();
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let extra_where = if let Some(where_clause) = where_clause {
+        where_clause.predicates.iter().collect()
+    } else {
+        Vec::new()
+    };
     quote! {
-        impl crate::pack::PackTagged for #name
+        impl #impl_generics crate::pack::PackTagged for #name #ty_generics
             where
                 #( #contained_types : crate::pack::Pack, )*
+                #( #extra_where, )*
         {
             type Tag = #tag_type;
             fn get_tag(&self) -> Self::Tag {
@@ -283,6 +316,7 @@ fn impl_pack_tagged_for_enum(
 fn impl_ext_enum_for_enum(
     name: &syn::Ident,
     attributes: &[syn::Attribute],
+    generics: &syn::Generics,
     variants: &syn::punctuated::Punctuated<syn::Variant, syn::token::Comma>,
 ) -> TokenStream {
     let tag_type = get_tag_type(attributes).unwrap();
@@ -315,8 +349,10 @@ fn impl_ext_enum_for_enum(
             }
         })
         .collect();
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
-        impl crate::pack::ExtEnum for #name
+        impl #impl_generics crate::pack::ExtEnum for #name #ty_generics
+            #where_clause
         {
             type Tag = #tag_type;
             fn into_tag(&self) -> Self::Tag {
