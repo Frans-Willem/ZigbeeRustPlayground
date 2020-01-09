@@ -1,3 +1,4 @@
+use crate::pack::ExtEnum;
 use cookie_factory::SerializeFn;
 use futures::prelude::*;
 use futures::ready;
@@ -6,7 +7,6 @@ use std::convert::TryFrom;
 use std::io::Write;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use crate::pack::ExtEnum;
 
 static RADIO_MAGIC_PREFIX: &[u8] = b"ZPB";
 

@@ -1,4 +1,7 @@
-use crate::pack::{Pack, PackError, PackTagged, SlicePackError, SlicePackTarget, VecPackTarget, ExtEnum, ExtEnumError};
+use crate::pack::{
+    ExtEnum, ExtEnumError, Pack, PackError, PackTagged, SlicePackError, SlicePackTarget,
+    VecPackTarget,
+};
 use core::convert::{Into, TryFrom};
 
 fn test_roundtrip<T: core::fmt::Debug + Eq + PartialEq + Pack>(input: T, packed: Vec<u8>) {

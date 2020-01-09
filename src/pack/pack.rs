@@ -5,17 +5,28 @@ use impl_trait_for_tuples::impl_for_tuples;
 pub enum UnpackError {
     NotEnoughData,  // Only valid for unpacking, not enough data available.
     InvalidEnumTag, // Invalid enum tag
+    Unsupported(Option<&'static str>), // Unpacking of this structure is not supported (e.g. reserved data is not 0)
+    Unimplemented(Option<&'static str>), // Unpacking of this structure was not yet properly implemented
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum PackError<T> {
-    NotAllowed, // In case the packing is not allowed. e.g. attempting to pack a list of more than 255 items where the packing has a length prefix of 8 bits.
-    TargetError(T), // Wraps around PackTarget::Error
+    NotAllowed(Option<&'static str>), // In case the packing is not allowed. e.g. attempting to pack a list of more than 255 items where the packing has a length prefix of 8 bits.
+    TargetError(T),                   // Wraps around PackTarget::Error
 }
 
+/*
 impl Into<UnpackError> for ExtEnumError {
     fn into(self) -> UnpackError {
         match self {
+            ExtEnumError::InvalidTag => UnpackError::InvalidEnumTag,
+        }
+    }
+}
+*/
+impl From<ExtEnumError> for UnpackError {
+    fn from(e: ExtEnumError) -> Self {
+        match e {
             ExtEnumError::InvalidTag => UnpackError::InvalidEnumTag,
         }
     }
