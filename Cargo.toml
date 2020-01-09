@@ -17,3 +17,4 @@ snowflake = "1.2"
 rand = "0.7"
 pack-derive = { path = "./pack_derive" }
 impl-trait-for-tuples = "0.1"
+bitfield = "0.13"

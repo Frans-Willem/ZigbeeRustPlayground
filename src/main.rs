@@ -5,6 +5,7 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::task::SpawnExt;
 mod async_std_executor;
+mod ieee802154;
 mod pack;
 mod radio;
 mod unique_key;
