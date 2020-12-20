@@ -53,6 +53,36 @@ impl TryFrom<(RadioParamType, &[u8])> for RadioParamValue {
     }
 }
 
+impl TryInto<u16> for RadioParamValue {
+    type Error = RadioError;
+    fn try_into(self) -> Result<u16, Self::Error> {
+        match self {
+            RadioParamValue::U16(x) => Ok(x),
+            _ => Err(RadioError::UnexpectedResponseSize),
+        }
+    }
+}
+
+impl TryInto<u32> for RadioParamValue {
+    type Error = RadioError;
+    fn try_into(self) -> Result<u32, Self::Error> {
+        match self {
+            RadioParamValue::U32(x) => Ok(x),
+            _ => Err(RadioError::UnexpectedResponseSize),
+        }
+    }
+}
+
+impl TryInto<u64> for RadioParamValue {
+    type Error = RadioError;
+    fn try_into(self) -> Result<u64, Self::Error> {
+        match self {
+            RadioParamValue::U64(x) => Ok(x),
+            _ => Err(RadioError::UnexpectedResponseSize),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum RadioRequest {
     SetParam(UniqueKey, RawRadioParam, RadioParamValue),
