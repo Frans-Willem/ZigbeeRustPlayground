@@ -13,35 +13,6 @@ use futures::io::AsyncReadExt;
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use unique_key::UniqueKey;
 
-/**
- * Quickly gets a parameter from the radio,
- * ignoring all other responses received before the get-response.
- */
-async fn radio_get_param<
-    RQ: Sink<radio::RadioRequest> + Unpin,
-    RS: Stream<Item = radio::RadioResponse> + Unpin,
->(
-    radio_requests: &mut RQ,
-    radio_responses: &mut RS,
-    param: radio::RadioParam,
-    param_type: radio::RadioParamType,
-) -> Result<radio::RadioParamValue, radio::RadioError> {
-    let token = UniqueKey::new();
-    radio_requests
-        .send(radio::RadioRequest::GetParam(token, param, param_type))
-        .await
-        .unwrap_or(());
-    loop {
-        if let Some(radio::RadioResponse::GetParam(response_token, _, result)) =
-            radio_responses.next().await
-        {
-            if token == response_token {
-                return result;
-            }
-        }
-    }
-}
-
 async fn async_main<
     RQ: Sink<radio::RadioRequest> + Unpin,
     RS: Stream<Item = radio::RadioResponse> + Unpin,
@@ -49,6 +20,7 @@ async fn async_main<
     mut radio_requests: RQ,
     mut radio_responses: RS,
 ) {
+    /*
     println!("Async main go go go!");
     let max_tx_power = radio_get_param(
         &mut radio_requests,
@@ -61,6 +33,7 @@ async fn async_main<
     if let radio::RadioParamValue::U64(v) = max_tx_power {
         println!("Address: {:X}", v);
     }
+    */
 }
 
 fn main() {

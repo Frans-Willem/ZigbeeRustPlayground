@@ -33,7 +33,7 @@ impl Future for AsyncStdExecutor {
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
         let joinhandles = std::mem::replace(self.handles.lock().unwrap().deref_mut(), Vec::new());
         for mut handle in joinhandles.into_iter() {
-            if let Poll::Pending = handle.poll_unpin(cx) {
+            if handle.poll_unpin(cx).is_pending() {
                 self.handles.lock().unwrap().push(handle);
             }
         }

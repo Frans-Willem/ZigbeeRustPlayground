@@ -165,10 +165,10 @@ impl RadioRequest {
                     match param_type {
                         RadioParamType::U16 => (),
                         RadioParamType::U32 => {
-                            data.extend_from_slice((4 as u16).to_be_bytes().as_ref())
+                            data.extend_from_slice((4_u16).to_be_bytes().as_ref())
                         }
                         RadioParamType::U64 => {
-                            data.extend_from_slice((8 as u16).to_be_bytes().as_ref())
+                            data.extend_from_slice((8_u16).to_be_bytes().as_ref())
                         }
                     };
                     data

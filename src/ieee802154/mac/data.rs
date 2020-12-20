@@ -266,7 +266,7 @@ impl Pack for Beacon {
         ss.set_reserved(0);
         ss.set_pan_coordinator(self.pan_coordinator as u16);
         ss.set_association_permit(self.association_permit as u16);
-        (ss, 0 as u8, 0 as u8).pack(target)
+        (ss, 0_u8, 0_u8).pack(target)
     }
 }
 

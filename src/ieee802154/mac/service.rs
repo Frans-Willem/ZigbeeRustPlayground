@@ -97,8 +97,8 @@ pub fn start_mac(
 ) {
     let data = MacData {
         radio: radio_requests,
-        mlme_confirms: mlme_confirms,
-        mlme_indications: mlme_indications,
+        mlme_confirms,
+        mlme_indications,
     };
     let task = data.process(radio_responses, mlme_requests);
     executor.spawn(task).unwrap();
