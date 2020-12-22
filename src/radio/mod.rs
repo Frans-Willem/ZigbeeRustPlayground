@@ -83,6 +83,54 @@ impl TryInto<u64> for RadioParamValue {
     }
 }
 
+impl From<u16> for RadioParamValue {
+    fn from(value: u16) -> RadioParamValue {
+        RadioParamValue::U16(value)
+    }
+}
+impl From<u32> for RadioParamValue {
+    fn from(value: u32) -> RadioParamValue {
+        RadioParamValue::U32(value)
+    }
+}
+impl From<u64> for RadioParamValue {
+    fn from(value: u64) -> RadioParamValue {
+        RadioParamValue::U64(value)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct RadioRxMode {
+    pub address_filter: bool,
+    pub autoack: bool,
+    pub poll_mode: bool,
+}
+
+impl From<RadioRxMode> for RadioParamValue {
+    fn from(value: RadioRxMode) -> RadioParamValue {
+        ((value.address_filter as u16)
+            | (value.autoack as u16) << 1
+            | (value.poll_mode as u16) << 2)
+            .into()
+    }
+}
+
+impl TryInto<RadioRxMode> for RadioParamValue {
+    type Error = RadioError;
+    fn try_into(self) -> Result<RadioRxMode, Self::Error> {
+        let value: u16 = self.try_into()?;
+        if value << 3 != 0 {
+            Err(RadioError::UnexpectedResponse)
+        } else {
+            Ok(RadioRxMode {
+                address_filter: (value & 1) != 0,
+                autoack: ((value >> 1) & 1) != 0,
+                poll_mode: ((value >> 2) & 1) != 0,
+            })
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum RadioRequest {
     SetParam(UniqueKey, RawRadioParam, RadioParamValue),
@@ -110,7 +158,7 @@ pub struct RadioPacket {
 #[derive(Debug)]
 pub enum RadioError {
     RawError(Vec<u8>),
-    RetvalError(u16, Vec<u8>),
+    UnexpectedRetvalError(u16, Vec<u8>),
     UnexpectedResponse,
     UnexpectedResponseSize,
 }
@@ -122,6 +170,57 @@ impl From<std::array::TryFromSliceError> for RadioError {
 }
 
 type RadioResponseParser = Box<dyn FnOnce(Result<&[u8], RadioError>) -> RadioResponse + Send>;
+
+fn check_retval(expected_retval: u16, data: &[u8]) -> Result<&[u8], RadioError> {
+    const U16_SIZE: usize = std::mem::size_of::<u16>();
+    if data.len() < U16_SIZE {
+        return Err(RadioError::UnexpectedResponseSize);
+    }
+    let retval = u16::from_be_bytes(data[0..U16_SIZE].try_into().unwrap());
+    if retval != expected_retval {
+        return Err(RadioError::UnexpectedRetvalError(
+            retval,
+            data[U16_SIZE..].to_vec(),
+        ));
+    }
+    Ok(&data[U16_SIZE..])
+}
+
+fn unpack_result_get_param(
+    param_type: RadioParamType,
+    response: Result<&[u8], RadioError>,
+) -> Result<RadioParamValue, RadioError> {
+    println!("Unpack get param: {:?}", response);
+    let data = response?;
+    let data = check_retval(0, data)?;
+    RadioParamValue::try_from((param_type, data))
+}
+
+fn unpack_result_set_param(
+    set_value: RadioParamValue,
+    response: Result<&[u8], RadioError>,
+) -> Result<RadioParamValue, RadioError> {
+    let data = response?;
+    let data = check_retval(0, data)?;
+    if !data.is_empty() {
+        Err(RadioError::UnexpectedResponse)
+    } else {
+        Ok(set_value)
+    }
+}
+
+fn unpack_result_only_retval(
+    expected_retval: u16,
+    response: Result<&[u8], RadioError>,
+) -> Result<(), RadioError> {
+    let data = response?;
+    let data = check_retval(expected_retval, data)?;
+    if !data.is_empty() {
+        Err(RadioError::UnexpectedResponse)
+    } else {
+        Ok(())
+    }
+}
 
 impl RadioRequest {
     fn into_raw(self) -> (raw::RawRadioCommand, Vec<u8>, RadioResponseParser) {
@@ -144,14 +243,7 @@ impl RadioRequest {
                     RadioResponse::SetParam(
                         token,
                         param,
-                        response.and_then(|data| {
-                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
-                            if retval == 0 {
-                                Ok(param_value)
-                            } else {
-                                Err(RadioError::RetvalError(retval, Vec::new()))
-                            }
-                        }),
+                        unpack_result_set_param(param_value, response),
                     )
                 }),
             ),
@@ -177,10 +269,7 @@ impl RadioRequest {
                     RadioResponse::GetParam(
                         token,
                         param,
-                        match response {
-                            Ok(data) => RadioParamValue::try_from((param_type, data)),
-                            Err(err) => Err(err),
-                        },
+                        unpack_result_get_param(param_type, response),
                     )
                 }),
             ),
@@ -190,14 +279,7 @@ impl RadioRequest {
                 Box::new(move |response| {
                     RadioResponse::InitPendingDataTable(
                         token,
-                        response.and_then(|data| {
-                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
-                            if retval == 0 {
-                                Ok(())
-                            } else {
-                                Err(RadioError::RetvalError(retval, Vec::new()))
-                            }
-                        }),
+                        unpack_result_only_retval(0, response),
                     )
                 }),
             ),
@@ -209,35 +291,14 @@ impl RadioRequest {
                 },
                 Vec::new(),
                 Box::new(move |response| {
-                    RadioResponse::SetPower(
-                        token,
-                        power,
-                        response.and_then(|data| {
-                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
-                            if retval == 0 {
-                                Ok(())
-                            } else {
-                                Err(RadioError::RetvalError(retval, Vec::new()))
-                            }
-                        }),
-                    )
+                    RadioResponse::SetPower(token, power, unpack_result_only_retval(1, response))
                 }),
             ),
             RadioRequest::SendPacket(token, packet) => (
                 RawRadioCommand::Send,
                 packet,
                 Box::new(move |response| {
-                    RadioResponse::SendPacket(
-                        token,
-                        response.and_then(|data| {
-                            let retval = u16::from_be_bytes(data.as_ref().try_into()?);
-                            if retval == 0 {
-                                Ok(())
-                            } else {
-                                Err(RadioError::RetvalError(retval, Vec::new()))
-                            }
-                        }),
-                    )
+                    RadioResponse::SendPacket(token, unpack_result_only_retval(0, response))
                 }),
             ),
         }
@@ -269,6 +330,7 @@ async fn radio_request_task<W: AsyncWrite + Unpin, S: Stream<Item = RadioRequest
             request_id,
             data,
         };
+        println!("RAWRADIO >> {:?}", request);
         if let Err(e) = port.send(request).await {
             println!("Unable to send: {:?}", e);
         }
@@ -288,22 +350,11 @@ async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioResponse> + Unpi
             request_id,
             data,
         } = port.next().await.unwrap();
+        println!("RAWRADIO << {:?} {:?} {:?}", command_id, request_id, data);
         match command_id {
             RawRadioCommand::Ok => {
                 if let Some(parser) = responsemap.lock().await.remove(&request_id) {
-                    responses
-                        .send(parser(if data.len() < 2 {
-                            Err(RadioError::UnexpectedResponseSize)
-                        } else {
-                            let retval = u16::from_be_bytes(data[0..2].try_into().unwrap());
-                            if retval == 0 {
-                                Ok(&data[2..])
-                            } else {
-                                Err(RadioError::RetvalError(retval, data[2..].to_vec()))
-                            }
-                        }))
-                        .await
-                        .unwrap_or(());
+                    responses.send(parser(Ok(&data))).await.unwrap_or(());
                 } else {
                     println!(
                         "Unable to find response parser for request_id {}",
@@ -355,7 +406,10 @@ pub fn start_radio<
     executor: S,
     read: R,
     write: W,
-) -> (impl Sink<RadioRequest>, impl Stream<Item = RadioResponse>) {
+) -> (
+    impl Sink<RadioRequest, Error = mpsc::SendError>,
+    impl Stream<Item = RadioResponse>,
+) {
     let (response_in, response_out) = mpsc::channel(0);
     let (request_in, request_out) = mpsc::channel(0);
     let task = radio_service(write, read, request_out, response_in);
