@@ -3,13 +3,14 @@ use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::pack::{ExtEnum, Pack, PackError, PackTagged, PackTarget, UnpackError};
 use bitfield::bitfield;
 
+// TODO: Move Address & FullAddress somewhere in the main 802154 package?
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PackTagged)]
 #[tag_type(AddressingMode)]
 pub enum Address {
     #[tag(AddressingMode::Short)]
     Short(ShortAddress),
     #[tag(AddressingMode::Extended)]
-    Extended(PANID, ExtendedAddress),
+    Extended(ExtendedAddress),
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -186,6 +187,7 @@ impl<P: Pack> Pack for Frame<P> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SlicePayload<'t>(&'t [u8]);
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct VecPayload(Vec<u8>);
 
 impl Pack for VecPayload {

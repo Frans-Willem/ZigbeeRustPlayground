@@ -1,3 +1,4 @@
+use crate::ieee802154::mac::data::FullAddress;
 use crate::ieee802154::ExtendedAddress;
 use crate::ieee802154::ShortAddress;
 use crate::ieee802154::PANID;
@@ -6,13 +7,6 @@ use crate::ieee802154::PANID;
 pub enum BeaconType {
     Beacon,
     EnhancedBeacon,
-}
-
-#[derive(Debug)]
-pub enum AnyAddr {
-    None,
-    Short(ShortAddress),
-    Extended(ExtendedAddress),
 }
 
 #[derive(Debug)]
@@ -25,9 +19,9 @@ pub enum Status {
 
 #[derive(Debug)]
 pub struct BeaconRequestIndication {
-    beacon_type: BeaconType,
-    src_addr: AnyAddr,
-    dst_pan_id: PANID,
+    pub beacon_type: BeaconType,
+    pub src_addr: Option<FullAddress>,
+    pub dst_pan_id: PANID,
     // Not supported yet: header_ie_list, payload_ie_list
 }
 
@@ -45,7 +39,7 @@ pub struct BeaconRequest {
     // beacon_key_id_mode
     // beacon_key_source
     // beacon_key_index
-    dst_addr: AnyAddr,
+    dst_addr: Option<FullAddress>,
     // bsn_suppression
 }
 
@@ -64,5 +58,5 @@ pub enum Confirm {
 
 #[derive(Debug)]
 pub enum Indication {
-    BeaconRequesT(BeaconRequest),
+    BeaconRequest(BeaconRequestIndication),
 }

@@ -147,12 +147,14 @@ pub enum RadioResponse {
     InitPendingDataTable(UniqueKey, Result<(), RadioError>),
     SetPower(UniqueKey, bool, Result<(), RadioError>),
     SendPacket(UniqueKey, Result<(), RadioError>),
-    OnPacket(Vec<u8>),
+    OnPacket(RadioPacket),
 }
 
 #[derive(Debug)]
 pub struct RadioPacket {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
+    pub rssi: u8,
+    pub link_quality: u8,
 }
 
 #[derive(Debug)]
@@ -371,7 +373,24 @@ async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioResponse> + Unpi
                         .unwrap_or(());
                 }
             }
-            RawRadioCommand::OnPacket => {}
+            RawRadioCommand::OnPacket => {
+                if data.len() < 2 {
+                    println!("RADIO: Packet received without postfix");
+                } else {
+                    let mut data = data;
+                    let link_quality = data.pop().unwrap();
+                    let rssi = data.pop().unwrap();
+                    let packet = RadioPacket {
+                        data,
+                        link_quality,
+                        rssi,
+                    };
+                    responses
+                        .send(RadioResponse::OnPacket(packet))
+                        .await
+                        .unwrap_or(());
+                }
+            }
             _ => {
                 println!("Unexpected packed from radio: {:?}", command_id);
             }

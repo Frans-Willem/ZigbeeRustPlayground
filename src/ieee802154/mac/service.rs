@@ -1,12 +1,16 @@
+use crate::ieee802154::mac::commands;
+use crate::ieee802154::mac::data;
 use crate::ieee802154::mac::mlme;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::pack::Pack;
 use crate::radio::{
-    RadioError, RadioParam, RadioParamType, RadioParamValue, RadioRequest, RadioResponse,
-    RadioRxMode,
+    RadioError, RadioPacket, RadioParam, RadioParamType, RadioParamValue, RadioRequest,
+    RadioResponse, RadioRxMode,
 };
 use crate::unique_key::UniqueKey;
 use futures::channel::mpsc;
 use futures::future::{Future, FutureExt};
+use futures::select;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 use std::convert::TryInto;
@@ -247,16 +251,46 @@ impl MacData {
         mut radio_responses: Box<dyn Stream<Item = RadioResponse> + Unpin + Send>,
         requests: Box<dyn Stream<Item = mlme::Request> + Unpin + Send>,
     ) {
-        let mut input_stream = futures::stream::select(
-            radio_responses.map(MacInput::Radio),
-            requests.map(MacInput::Request),
-        );
-        while let Some(input) = input_stream.next().await {
+        let mut radio_responses = radio_responses.fuse();
+        let mut requests = requests.fuse();
+        while let Some(input) = select! {
+            x = radio_responses.next() => x.map(MacInput::Radio),
+            x = requests.next() => x.map(MacInput::Request),
+        } {
             match input {
-                i => println!("Mac: Unhandled input: {:?}", i),
+                MacInput::Radio(x) => self.process_radio_response(x).await,
+                input => println!("Mac: Unhandled input: {:?}", input),
             }
         }
-        println!("Mac: Mac inputs dried up, stopping service")
+        println!("Mac: One or more inputs dried up, stopping service")
+    }
+
+    async fn process_radio_response(&mut self, response: RadioResponse) {
+        match response {
+            RadioResponse::OnPacket(p) => self.process_packet(p).await,
+            r => println!("Unhandled radio response: {:?}", r),
+        }
+    }
+    async fn process_packet(&mut self, packet: RadioPacket) {
+        println!("Packet! {:?}", packet);
+        let (frame, rest) = data::Frame::<data::VecPayload>::unpack(&packet.data).unwrap();
+        println!("Frame: {:?}", frame);
+        match &frame.frame_type {
+            data::FrameType::Command(commands::Command::BeaconRequest()) => {
+                let request = mlme::BeaconRequestIndication {
+                    beacon_type: mlme::BeaconType::Beacon, // NOTE: Cheating, we should check the frame more carefully.
+                    src_addr: frame.source.clone(),
+                    dst_pan_id: frame
+                        .destination
+                        .map_or(PANID::broadcast(), |full_address| full_address.pan_id),
+                };
+                self.mlme_indications
+                    .send(mlme::Indication::BeaconRequest(request))
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
     }
 }
 

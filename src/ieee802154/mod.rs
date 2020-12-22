@@ -52,3 +52,9 @@ impl Into<u16> for PANID {
         self.0
     }
 }
+
+impl PANID {
+    pub fn broadcast() -> Self {
+        PANID(0xFFFF)
+    }
+}
