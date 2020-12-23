@@ -37,7 +37,7 @@ pub struct RawRadioMessage {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RawRadioParam {
     PowerMode = 0,
     Channel,

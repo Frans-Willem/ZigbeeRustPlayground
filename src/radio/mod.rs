@@ -24,7 +24,7 @@ pub enum RadioParamType {
     U64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum RadioParamValue {
     U16(u16),
     U32(u32),

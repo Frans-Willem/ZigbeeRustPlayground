@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use async_std::task;
 use futures::channel::mpsc;
-use futures::prelude::{Sink, Stream};
-use futures::stream::StreamExt;
+use futures::sink::{Sink, SinkExt};
+use futures::stream::{Stream, StreamExt};
 use futures::task::SpawnExt;
 mod async_std_executor;
 mod ieee802154;
@@ -11,6 +11,7 @@ mod radio;
 mod unique_key;
 use futures::select;
 use ieee802154::mac;
+use ieee802154::mac::pib::{PIBProperty, PIBValue};
 use ieee802154::{ShortAddress, PANID};
 use libc;
 use pcap;
@@ -23,18 +24,78 @@ enum MainloopInput {
     MlmeConfirm(mac::mlme::Confirm),
     MlmeIndication(mac::mlme::Indication),
 }
+
+/**
+ * Normal startup described in 6.3.3.1 of 802.15.4-2015:
+ * - MLME-RESET with SetDefaultPIB = TRUE
+ * - MLME-START with PanCoordinator set to TRUE and CoordRealignment set to FALSE
+ */
+
 async fn mainloop(
-    mlme_requests: Box<dyn Sink<mac::mlme::Request, Error = mpsc::SendError> + Unpin + Send>,
+    mut mlme_requests: Box<dyn Sink<mac::mlme::Request, Error = mpsc::SendError> + Unpin + Send>,
     mlme_confirms: Box<dyn Stream<Item = mac::mlme::Confirm> + Unpin + Send>,
     mlme_indications: Box<dyn Stream<Item = mac::mlme::Indication> + Unpin + Send>,
 ) {
+    mlme_requests
+        .send(mac::mlme::Request::Reset(mac::mlme::ResetRequest {
+            set_default_pib: true,
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::PhyCurrentChannel,
+            value: 25_u16.into(),
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::MacPanId,
+            value: PANID(0x1234).into(),
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::MacShortAddress,
+            value: ShortAddress(0x0000).into(),
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Get(mac::mlme::GetRequest {
+            attribute: PIBProperty::MacExtendedAddress,
+        }))
+        .await
+        .unwrap();
     let mut mlme_confirms = mlme_confirms.fuse();
     let mut mlme_indications = mlme_indications.fuse();
     while let Some(input) = select! {
         x = mlme_confirms.next() => x.map(MainloopInput::MlmeConfirm),
         x = mlme_indications.next() => x.map(MainloopInput::MlmeIndication),
     } {
-        println!("Mainloop input: {:?}", input);
+        match input {
+            MainloopInput::MlmeIndication(mac::mlme::Indication::BeaconRequest {
+                beacon_type,
+                src_addr,
+                dst_pan_id,
+            }) => {
+                println!("Beacon request!");
+                let request = mac::mlme::BeaconRequest {
+                    beacon_type,
+                    channel: 25,
+                    channel_page: 0,
+                    superframe_order: 15,
+                    dst_addr: None,
+                };
+                mlme_requests
+                    .send(mac::mlme::Request::Beacon(request))
+                    .await
+                    .unwrap();
+            }
+            input => println!("Mainloop unhandled input: {:?}", input),
+        }
     }
 }
 
@@ -96,11 +157,6 @@ fn main() {
     let (mlme_indications_in, mlme_indications_out) = mpsc::unbounded();
     println!("Done?");
     exec.spawn(mac::service::start(
-        mac::service::MacConfig {
-            channel: 25,
-            short_address: ShortAddress(0),
-            pan_id: PANID(0x1234),
-        },
         Box::new(radio_requests),
         Box::new(radio_responses),
         Box::new(mlme_requests_out),
