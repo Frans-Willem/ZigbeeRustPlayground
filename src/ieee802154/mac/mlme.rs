@@ -1,7 +1,7 @@
 use crate::ieee802154::mac::data::FullAddress;
 use crate::ieee802154::mac::pib::{PIBProperty, PIBValue};
-use crate::ieee802154::ExtendedAddress;
-use crate::ieee802154::ShortAddress;
+
+
 use crate::ieee802154::PANID;
 
 #[derive(Debug)]

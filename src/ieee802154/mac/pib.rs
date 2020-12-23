@@ -1,7 +1,7 @@
 use crate::ieee802154::mac::mlme;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use rand::random;
-use std::convert::{TryFrom, TryInto};
+use std::convert::{TryInto};
 
 /**
  * Implements a PIB as described in 8.4 of 802.15.4-2015 standard

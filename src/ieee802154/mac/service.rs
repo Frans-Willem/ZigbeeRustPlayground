@@ -10,7 +10,7 @@ use crate::radio::{
 };
 use crate::unique_key::UniqueKey;
 use futures::channel::mpsc;
-use futures::future::{Future, FutureExt};
+use futures::future::{FutureExt};
 use futures::select;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
@@ -217,7 +217,7 @@ impl MacData {
 
     async fn process(
         mut self,
-        mut radio_responses: Box<dyn Stream<Item = RadioResponse> + Unpin + Send>,
+        radio_responses: Box<dyn Stream<Item = RadioResponse> + Unpin + Send>,
         requests: Box<dyn Stream<Item = mlme::Request> + Unpin + Send>,
     ) {
         let mut radio_responses = radio_responses.fuse();
@@ -331,7 +331,7 @@ impl MacData {
             pan_coordinator: true, // Not sure how to set this parameter correctly :/
             association_permit: self.pib.mac_association_permit,
         };
-        let frame = data::Frame::<data::VecPayload> {
+        let _frame = data::Frame::<data::VecPayload> {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(self.pib.next_beacon_sequence_nr()),

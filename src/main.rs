@@ -11,11 +11,11 @@ mod radio;
 mod unique_key;
 use futures::select;
 use ieee802154::mac;
-use ieee802154::mac::pib::{PIBProperty, PIBValue};
+use ieee802154::mac::pib::{PIBProperty};
 use ieee802154::{ShortAddress, PANID};
 use libc;
 use pcap;
-use radio::{RadioPacket, RadioResponse};
+use radio::{RadioResponse};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::sync::Mutex;
 
@@ -78,8 +78,8 @@ async fn mainloop(
         match input {
             MainloopInput::MlmeIndication(mac::mlme::Indication::BeaconRequest {
                 beacon_type,
-                src_addr,
-                dst_pan_id,
+                src_addr: _,
+                dst_pan_id: _,
             }) => {
                 println!("Beacon request!");
                 let request = mac::mlme::BeaconRequest {
