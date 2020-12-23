@@ -236,7 +236,7 @@ impl MacData {
     }
 
     async fn update_radio_params(&mut self) {
-        let mut wanted: Vec<(RadioParam, RadioParamValue)> = vec![
+        let wanted: Vec<(RadioParam, RadioParamValue)> = vec![
             (RadioParam::Channel, self.pib.phy_current_channel.into()),
             (RadioParam::PanId, self.pib.mac_pan_id.0.into()),
             (
