@@ -1,7 +1,7 @@
 use crate::ieee802154::mac::mlme;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use rand::random;
-use std::convert::{TryInto};
+use std::convert::TryInto;
 
 /**
  * Implements a PIB as described in 8.4 of 802.15.4-2015 standard
@@ -266,14 +266,14 @@ impl PIB {
             PIBProperty::MacExtendedAddress => Err(mlme::Error::ReadOnly),
             PIBProperty::MacAssociationPermit => {
                 self.mac_association_permit =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                    value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
-            },
+            }
             PIBProperty::MacBeaconPayload => {
                 self.mac_beacon_payload =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                    value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
-            },
+            }
             PIBProperty::MacBsn => {
                 self.mac_bsn = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
@@ -287,18 +287,16 @@ impl PIB {
                 Ok(())
             }
             PIBProperty::MacShortAddress => {
-                self.mac_short_address =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                self.mac_short_address = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
             }
             PIBProperty::PhyCurrentChannel => {
                 self.phy_current_channel =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                    value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
-            },
+            }
             PIBProperty::PhyMaxTxPower => {
-                self.phy_max_tx_power =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                self.phy_max_tx_power = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
             }
             PIBProperty::PhyTxPower => {
