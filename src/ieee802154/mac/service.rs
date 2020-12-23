@@ -256,14 +256,12 @@ impl MacData {
         //wanted.insert(RadioParam::LongAddress, self.pib.mac_extended_address.0.into());
 
         for (attribute, value) in wanted.drain() {
-            if !self.radio_param_updating.contains(&attribute) {
-                if self.radio_param_cache.get(&attribute) != Some(&value) {
-                    self.radio_param_updating.insert(attribute);
-                    self.radio
-                        .send(RadioRequest::SetParam(UniqueKey::new(), attribute, value))
-                        .await
-                        .unwrap();
-                }
+            if !self.radio_param_updating.contains(&attribute) && self.radio_param_cache.get(&attribute) != Some(&value) {
+                self.radio_param_updating.insert(attribute);
+                self.radio
+                    .send(RadioRequest::SetParam(UniqueKey::new(), attribute, value))
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -291,7 +289,7 @@ impl MacData {
             data::FrameType::Command(commands::Command::BeaconRequest()) => {
                 let request = mlme::Indication::BeaconRequest {
                     beacon_type: mlme::BeaconType::Beacon, // NOTE: Cheating, we should check the frame more carefully.
-                    src_addr: frame.source.clone(),
+                    src_addr: frame.source,
                     dst_pan_id: frame
                         .destination
                         .map_or(PANID::broadcast(), |full_address| full_address.pan_id),

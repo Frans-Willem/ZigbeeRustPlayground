@@ -13,8 +13,8 @@ use futures::select;
 use ieee802154::mac;
 use ieee802154::mac::pib::{PIBProperty};
 use ieee802154::{ShortAddress, PANID};
-use libc;
-use pcap;
+
+
 use radio::{RadioResponse};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::sync::Mutex;

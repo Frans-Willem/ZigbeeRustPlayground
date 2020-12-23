@@ -264,31 +264,46 @@ impl PIB {
     pub fn set(&mut self, param: PIBProperty, value: PIBValue) -> Result<(), mlme::Error> {
         match param {
             PIBProperty::MacExtendedAddress => Err(mlme::Error::ReadOnly),
-            PIBProperty::MacAssociationPermit => Ok(self.mac_association_permit =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?),
-            PIBProperty::MacBeaconPayload => Ok(self.mac_beacon_payload =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?),
+            PIBProperty::MacAssociationPermit => {
+                self.mac_association_permit =
+                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
+            },
+            PIBProperty::MacBeaconPayload => {
+                self.mac_beacon_payload =
+                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
+            },
             PIBProperty::MacBsn => {
-                Ok(self.mac_bsn = value.try_into().or(Err(mlme::Error::InvalidParameter))?)
+                self.mac_bsn = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
             }
             PIBProperty::MacDsn => {
-                Ok(self.mac_dsn = value.try_into().or(Err(mlme::Error::InvalidParameter))?)
+                self.mac_dsn = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
             }
             PIBProperty::MacPanId => {
-                Ok(self.mac_pan_id = value.try_into().or(Err(mlme::Error::InvalidParameter))?)
+                self.mac_pan_id = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
             }
             PIBProperty::MacShortAddress => {
-                Ok(self.mac_short_address =
-                    value.try_into().or(Err(mlme::Error::InvalidParameter))?)
+                self.mac_short_address =
+                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
             }
-            PIBProperty::PhyCurrentChannel => Ok(self.phy_current_channel =
-                value.try_into().or(Err(mlme::Error::InvalidParameter))?),
+            PIBProperty::PhyCurrentChannel => {
+                self.phy_current_channel =
+                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
+            },
             PIBProperty::PhyMaxTxPower => {
-                Ok(self.phy_max_tx_power =
-                    value.try_into().or(Err(mlme::Error::InvalidParameter))?)
+                self.phy_max_tx_power =
+                value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
             }
             PIBProperty::PhyTxPower => {
-                Ok(self.phy_tx_power = value.try_into().or(Err(mlme::Error::InvalidParameter))?)
+                self.phy_tx_power = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
             }
             _ => Err(mlme::Error::UnsupportedAttribute),
         }

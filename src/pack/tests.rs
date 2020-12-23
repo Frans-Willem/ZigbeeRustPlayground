@@ -180,22 +180,22 @@ fn test_ext_enum() {
         C,
         D = 3,
     }
-    assert_eq!(Test::A.into_tag(), 0 as u8);
-    assert_eq!(Test::B.into_tag(), 1 as u8);
-    assert_eq!(Test::C.into_tag(), 2 as u8);
-    assert_eq!(Test::D.into_tag(), 3 as u8);
-    assert_eq!(core::convert::Into::<u8>::into(Test::A), 0 as u8);
-    assert_eq!(core::convert::Into::<u8>::into(Test::B), 1 as u8);
-    assert_eq!(core::convert::Into::<u8>::into(Test::C), 2 as u8);
-    assert_eq!(core::convert::Into::<u8>::into(Test::D), 3 as u8);
+    assert_eq!(Test::A.into_tag(), 0_u8);
+    assert_eq!(Test::B.into_tag(), 1_u8);
+    assert_eq!(Test::C.into_tag(), 2_u8);
+    assert_eq!(Test::D.into_tag(), 3_u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::A), 0_u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::B), 1_u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::C), 2_u8);
+    assert_eq!(core::convert::Into::<u8>::into(Test::D), 3_u8);
     assert_eq!(Test::try_from_tag(0), Ok(Test::A));
     assert_eq!(Test::try_from_tag(1), Ok(Test::B));
     assert_eq!(Test::try_from_tag(2), Ok(Test::C));
     assert_eq!(Test::try_from_tag(3), Ok(Test::D));
     assert_eq!(Test::try_from_tag(4), Err(ExtEnumError::InvalidTag));
-    assert_eq!(Test::try_from(0 as u8), Ok(Test::A));
-    assert_eq!(Test::try_from(1 as u8), Ok(Test::B));
-    assert_eq!(Test::try_from(2 as u8), Ok(Test::C));
-    assert_eq!(Test::try_from(3 as u8), Ok(Test::D));
-    assert_eq!(Test::try_from(4 as u8), Err(ExtEnumError::InvalidTag));
+    assert_eq!(Test::try_from(0_u8), Ok(Test::A));
+    assert_eq!(Test::try_from(1_u8), Ok(Test::B));
+    assert_eq!(Test::try_from(2_u8), Ok(Test::C));
+    assert_eq!(Test::try_from(3_u8), Ok(Test::D));
+    assert_eq!(Test::try_from(4_u8), Err(ExtEnumError::InvalidTag));
 }
