@@ -14,10 +14,10 @@ use futures::future::{Future, FutureExt};
 use futures::select;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
-use std::convert::TryInto;
-use std::marker::Unpin;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::convert::TryInto;
+use std::marker::Unpin;
 
 /**
  * Quickly gets a parameter from the radio,
@@ -236,15 +236,22 @@ impl MacData {
     }
 
     async fn update_radio_params(&mut self) {
-        let mut wanted : HashMap<RadioParam, RadioParamValue> = HashMap::new();
+        let mut wanted: HashMap<RadioParam, RadioParamValue> = HashMap::new();
         wanted.insert(RadioParam::Channel, self.pib.phy_current_channel.into());
         wanted.insert(RadioParam::PanId, self.pib.mac_pan_id.0.into());
-        wanted.insert(RadioParam::ShortAddress, self.pib.mac_short_address.0.into());
-        wanted.insert(RadioParam::RxMode, RadioRxMode {
-            address_filter: true,
-            autoack: true,
-            poll_mode: false,
-        }.into());
+        wanted.insert(
+            RadioParam::ShortAddress,
+            self.pib.mac_short_address.0.into(),
+        );
+        wanted.insert(
+            RadioParam::RxMode,
+            RadioRxMode {
+                address_filter: true,
+                autoack: true,
+                poll_mode: false,
+            }
+            .into(),
+        );
         wanted.insert(RadioParam::TxPower, self.pib.phy_tx_power.into());
         //wanted.insert(RadioParam::LongAddress, self.pib.mac_extended_address.0.into());
 
@@ -252,7 +259,10 @@ impl MacData {
             if !self.radio_param_updating.contains(&attribute) {
                 if self.radio_param_cache.get(&attribute) != Some(&value) {
                     self.radio_param_updating.insert(attribute);
-                    self.radio.send(RadioRequest::SetParam(UniqueKey::new(), attribute, value)).await.unwrap();
+                    self.radio
+                        .send(RadioRequest::SetParam(UniqueKey::new(), attribute, value))
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -269,7 +279,7 @@ impl MacData {
                 }
                 self.radio_param_updating.remove(&param);
                 self.update_radio_params().await;
-            },
+            }
             r => println!("Unhandled radio response: {:?}", r),
         }
     }
