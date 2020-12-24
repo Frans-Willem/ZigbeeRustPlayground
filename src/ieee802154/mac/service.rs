@@ -137,6 +137,176 @@ async fn radio_set_power(
     }
 }
 
+#[derive(Clone)]
+struct MacQueueEntry {
+    key: UniqueKey,
+    destination: Option<data::FullAddress>,
+    source_mode: data::AddressingMode,
+    acknowledge_request: bool,
+    indirect: bool,
+}
+
+struct MacDeviceQueue {
+    queue: VecDeque<MacQueueEntry>,
+    waiting_for_ack: bool,
+}
+
+impl MacDeviceQueue {
+    fn new() -> Self {
+        MacDeviceQueue {
+            queue: VecDeque::new(),
+            waiting_for_ack: false,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    fn is_pending_indirect(&self) -> bool {
+        if self.waiting_for_ack {
+            if let Some(next) = self.queue.get(1) {
+                next.indirect
+            } else {
+                false
+            }
+        } else if let Some(head) = self.queue.front() {
+            head.indirect
+        } else {
+            false
+        }
+    }
+
+    fn insert(&mut self, entry: MacQueueEntry) {
+        self.queue.push_back(entry)
+    }
+
+    fn purge(&mut self, key: UniqueKey) {
+        if let (true, Some(head)) = (self.waiting_for_ack, self.queue.front()) {
+            if head.key == key {
+                self.waiting_for_ack = false
+            }
+        }
+        self.queue.retain(|e| e.key != key)
+    }
+
+    fn pop_to_send(&mut self, datarequest: bool) -> Option<MacQueueEntry> {
+        if self.waiting_for_ack {
+            None
+        } else if let Some(head) = self.queue.front() {
+            if head.indirect == datarequest {
+                if head.acknowledge_request {
+                    self.waiting_for_ack = true;
+                    Some(head.clone())
+                } else {
+                    self.queue.pop_front()
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn acknowledge_timeout(&mut self) {
+        self.waiting_for_ack = false;
+    }
+
+    fn acknowledge(&mut self, key: UniqueKey) {
+        if self.waiting_for_ack {
+            if let Some(head) = self.queue.front() {
+                if head.key == key {
+                    self.waiting_for_ack = false;
+                    self.queue.pop_front();
+                }
+            }
+        }
+    }
+}
+
+struct MacQueue {
+    frames: HashMap<UniqueKey, Option<data::FullAddress>>,
+    device_queues: HashMap<Option<data::FullAddress>, MacDeviceQueue>,
+}
+
+impl MacQueue {
+    fn new() -> MacQueue {
+        MacQueue {
+            frames: HashMap::new(),
+            device_queues: HashMap::new(),
+        }
+    }
+
+    fn purge(&mut self, key: UniqueKey) -> bool {
+        if let Some(destination) = self.frames.remove(&key) {
+            if let Some(device_queue) = self.device_queues.get_mut(&destination) {
+                device_queue.purge(key);
+                if device_queue.is_empty() {
+                    self.device_queues.remove(&destination);
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn pop_to_send(&mut self, datarequest: bool) -> Option<MacQueueEntry> {
+        for (destination, device_queue) in self.device_queues.iter_mut() {
+            if let Some(to_send) = device_queue.pop_to_send(datarequest) {
+                if to_send.acknowledge_request {
+                    return Some(to_send)
+                } else {
+                    self.frames.remove(&to_send.key);
+                    if device_queue.is_empty() {
+                        let destination = destination.clone();
+                        self.device_queues.remove(&destination);
+                    }
+                    return Some(to_send)
+                }
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, entry: MacQueueEntry) -> bool {
+        let key = entry.key;
+        let destination = entry.destination.clone();
+        if let Some(old_destination) = self.frames.insert(key, destination) {
+            self.frames.insert(key, old_destination);
+            false
+        } else {
+            if let Some(device_queue) = self.device_queues.get_mut(&destination) {
+                device_queue.insert(entry);
+            } else {
+                let mut new_queue = MacDeviceQueue::new();
+                new_queue.insert(entry);
+                self.device_queues.insert(destination, new_queue);
+            }
+            true
+        }
+    }
+
+    fn is_pending_indirect(&self, address: Option<data::FullAddress>) -> bool {
+        if let Some(device_queue) = self.device_queues.get(&address) {
+            device_queue.is_pending_indirect()
+        } else {
+            false
+        }
+    }
+
+    fn get_pending_indirect_data(&self) -> HashSet<Option<data::FullAddress>> {
+        let mut set = HashSet::new();
+        for (destination, device_queue) in self.device_queues.iter() {
+            if device_queue.is_pending_indirect() {
+                set.insert(destination.clone());
+            }
+        }
+        set
+    }
+}
+
 struct MacData {
     pib: pib::PIB,
     radio: Box<dyn Sink<RadioRequest, Error = mpsc::SendError> + Unpin + Send>,
@@ -146,6 +316,7 @@ struct MacData {
     radio_param_updating: HashSet<RadioParam>,
     packet_queue: VecDeque<Vec<u8>>,
     packet_in_progress: Option<UniqueKey>,
+    queue: MacQueue,
 }
 
 #[derive(Debug)]
@@ -218,6 +389,7 @@ impl MacData {
             radio_param_updating: HashSet::new(),
             packet_queue: VecDeque::new(),
             packet_in_progress: None,
+            queue: MacQueue::new(),
         }
     }
 
