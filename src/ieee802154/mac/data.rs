@@ -48,13 +48,13 @@ pub enum AddressingMode {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Frame<P> {
+pub struct Frame {
     pub frame_pending: bool,
     pub acknowledge_request: bool,
     pub sequence_number: Option<u8>,
     pub destination: Option<FullAddress>,
     pub source: Option<FullAddress>,
-    pub frame_type: FrameType<P>,
+    pub frame_type: FrameType,
 }
 
 bitfield! {
@@ -74,7 +74,7 @@ bitfield! {
     pub source_addressing_mode, set_source_addressing_mode: 15, 14;
 }
 
-impl<P: Pack> Frame<P> {
+impl Frame {
     fn unpack_address(
         mode: AddressingMode,
         previous_pan: Option<PANID>,
@@ -92,19 +92,19 @@ impl<P: Pack> Frame<P> {
     }
 }
 
-impl<P: Pack> Pack for Frame<P> {
+impl Pack for Frame {
     fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
         let (fc, data) = FrameControl::unpack(data)?;
         let frame_pending = fc.frame_pending() != 0;
         let acknowledge_request = fc.acknowledge_request() != 0;
         let (sequence_number, data) =
             <Option<u8>>::unpack_data(fc.sequence_number_supression() == 0, data)?;
-        let (destination, data) = <Frame<P>>::unpack_address(
+        let (destination, data) = <Frame>::unpack_address(
             AddressingMode::try_from_tag(fc.destination_addressing_mode())?,
             None,
             data,
         )?;
-        let (source, data) = <Frame<P>>::unpack_address(
+        let (source, data) = <Frame>::unpack_address(
             AddressingMode::try_from_tag(fc.source_addressing_mode())?,
             if fc.pan_id_compression() != 0 {
                 destination.map(|d| d.pan_id)
@@ -123,7 +123,7 @@ impl<P: Pack> Pack for Frame<P> {
                 "Secured frames not yet supported",
             )));
         }
-        let (frame_type, data) = <FrameType<P>>::unpack_data(fc.frame_type() as u8, data)?;
+        let (frame_type, data) = FrameType::unpack_data(fc.frame_type() as u8, data)?;
         Ok((
             Frame {
                 frame_pending,
@@ -186,13 +186,11 @@ impl<P: Pack> Pack for Frame<P> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SlicePayload<'t>(&'t [u8]);
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VecPayload(pub Vec<u8>);
+pub struct Payload(pub Vec<u8>);
 
-impl Pack for VecPayload {
+impl Pack for Payload {
     fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
-        Ok((VecPayload(<Vec<u8>>::from(data)), &data[data.len()..]))
+        Ok((Payload(<Vec<u8>>::from(data)), &data[data.len()..]))
     }
 
     fn pack<T: PackTarget>(&self, target: T) -> Result<T, PackError<T::Error>> {
@@ -201,14 +199,14 @@ impl Pack for VecPayload {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Beacon<P> {
+pub struct Beacon {
     pub beacon_order: usize,
     pub superframe_order: usize,
     pub final_cap_slot: usize,
     pub battery_life_extension: bool,
     pub pan_coordinator: bool,
     pub association_permit: bool,
-    pub payload: P,
+    pub payload: Payload,
 }
 
 bitfield! {
@@ -224,7 +222,7 @@ bitfield! {
     pub association_permit, set_association_permit: 15, 15;
 }
 
-impl<P: Pack> Pack for Beacon<P> {
+impl Pack for Beacon {
     fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
         let ((ss, gts, pending_addresses), data) =
             <(SuperframeSpecification, u8, u8)>::unpack(data)?;
@@ -233,7 +231,7 @@ impl<P: Pack> Pack for Beacon<P> {
                 "Non-zero GTS or pending-addresses not yet supported",
             )));
         }
-        let (payload, data) = <P>::unpack(data)?;
+        let (payload, data) = Payload::unpack(data)?;
         Ok((
             Beacon {
                 beacon_order: ss.beacon_order() as usize,
@@ -278,21 +276,21 @@ impl<P: Pack> Pack for Beacon<P> {
 
 #[derive(Debug, PartialEq, Eq, Clone, PackTagged)]
 #[tag_type(u8)]
-pub enum FrameType<P> {
+pub enum FrameType {
     #[tag(0)]
-    Beacon(Beacon<P>),
+    Beacon(Beacon),
     #[tag(1)]
-    Data(P),
+    Data(Payload),
     #[tag(2)]
-    Ack(P),
+    Ack(Payload),
     #[tag(3)]
     Command(Command),
     #[tag(4)]
-    Reserved(P),
+    Reserved(Payload),
     #[tag(5)]
-    Multipurpose(P),
+    Multipurpose(Payload),
     #[tag(6)]
-    Fragment(P),
+    Fragment(Payload),
     #[tag(7)]
-    Extended(P),
+    Extended(Payload),
 }

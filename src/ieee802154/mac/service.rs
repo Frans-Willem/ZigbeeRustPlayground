@@ -286,7 +286,7 @@ impl MacData {
     }
     async fn process_packet(&mut self, packet: RadioPacket) {
         println!("Packet! {:?}", packet);
-        let (frame, rest) = data::Frame::<data::VecPayload>::unpack(&packet.data).unwrap();
+        let (frame, rest) = data::Frame::unpack(&packet.data).unwrap();
         println!("Frame: {:?} + {:?}", frame, rest);
         match &frame.frame_type {
             data::FrameType::Command(commands::Command::BeaconRequest()) => {
@@ -296,7 +296,7 @@ impl MacData {
         }
     }
 
-    async fn process_packet_beaconrequest(&mut self, frame: &data::Frame<data::VecPayload>) {
+    async fn process_packet_beaconrequest(&mut self, frame: &data::Frame) {
         let beacon_type = mlme::BeaconType::Beacon; // NOTE: Cheating, we should check the frame more carefully.
         if self.pib.mac_beacon_auto_respond {
             let request = mlme::BeaconRequest {
@@ -349,9 +349,9 @@ impl MacData {
             pan_coordinator: self.pib.mac_associated_pan_coord
                 == Some((self.pib.mac_extended_address, self.pib.mac_short_address)),
             association_permit: self.pib.mac_association_permit,
-            payload: data::VecPayload(self.pib.mac_beacon_payload.clone()),
+            payload: data::Payload(self.pib.mac_beacon_payload.clone()),
         };
-        let frame = data::Frame::<data::VecPayload> {
+        let frame = data::Frame {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(self.pib.next_beacon_sequence_nr()),
@@ -364,7 +364,7 @@ impl MacData {
                     data::Address::Extended(self.pib.mac_extended_address)
                 },
             }),
-            frame_type: data::FrameType::<data::VecPayload>::Beacon(beacon),
+            frame_type: data::FrameType::Beacon(beacon),
         };
         let packet: Vec<u8> = frame.pack(VecPackTarget::new()).unwrap().into();
 
