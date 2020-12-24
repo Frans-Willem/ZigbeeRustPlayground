@@ -256,14 +256,14 @@ impl MacQueue {
         for (destination, device_queue) in self.device_queues.iter_mut() {
             if let Some(to_send) = device_queue.pop_to_send(datarequest) {
                 if to_send.acknowledge_request {
-                    return Some(to_send)
+                    return Some(to_send);
                 } else {
                     self.frames.remove(&to_send.key);
                     if device_queue.is_empty() {
                         let destination = destination.clone();
                         self.device_queues.remove(&destination);
                     }
-                    return Some(to_send)
+                    return Some(to_send);
                 }
             }
         }
