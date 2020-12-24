@@ -17,6 +17,7 @@ pub enum PIBProperty {
     MacDsn,
     MacPanId,
     MacShortAddress,
+    MacBeaconAutoRespond,
     PhyCurrentChannel,
     PhyMaxTxPower,
     PhyTxPower,
@@ -200,6 +201,7 @@ pub struct PIB {
     pub mac_dsn: u8,
     pub mac_pan_id: PANID,
     pub mac_short_address: ShortAddress,
+    pub mac_beacon_auto_respond: bool,
     pub phy_current_channel: u16,
     pub phy_max_tx_power: u16,
     pub phy_tx_power: u16,
@@ -230,6 +232,7 @@ impl PIB {
             mac_dsn: random(),
             mac_pan_id: PANID(0xFFFF),
             mac_short_address: ShortAddress(0xFFFF),
+            mac_beacon_auto_respond: false,
             phy_current_channel,
             phy_max_tx_power,
             phy_tx_power: phy_max_tx_power,
@@ -254,6 +257,7 @@ impl PIB {
             PIBProperty::MacDsn => Ok(self.mac_dsn.into()),
             PIBProperty::MacPanId => Ok(self.mac_pan_id.into()),
             PIBProperty::MacShortAddress => Ok(self.mac_short_address.into()),
+            PIBProperty::MacBeaconAutoRespond => Ok(self.mac_beacon_auto_respond.into()),
             PIBProperty::PhyCurrentChannel => Ok(self.phy_current_channel.into()),
             PIBProperty::PhyMaxTxPower => Ok(self.phy_max_tx_power.into()),
             PIBProperty::PhyTxPower => Ok(self.phy_tx_power.into()),
@@ -288,6 +292,11 @@ impl PIB {
             }
             PIBProperty::MacShortAddress => {
                 self.mac_short_address = value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
+            }
+            PIBProperty::MacBeaconAutoRespond => {
+                self.mac_beacon_auto_respond =
+                    value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
             }
             PIBProperty::PhyCurrentChannel => {

@@ -17,6 +17,7 @@ pub enum Error {
     UnsupportedAttribute,
     InvalidIndex,
     InvalidParameter,
+    NoShortAddress,
 }
 
 #[derive(Debug)]
@@ -26,8 +27,8 @@ pub struct ResetRequest {
 #[derive(Debug)]
 pub struct StartRequest {
     pub pan_id: PANID,
-    pub channel_number: u32,
-    pub channel_page: u32,
+    pub channel_number: u16,
+    pub channel_page: u16,
     pub start_time: u32,
     pub beacon_order: u8,
     pub superframe_order: u8,
@@ -78,6 +79,7 @@ pub enum Request {
 #[derive(Debug)]
 pub enum Confirm {
     Reset(Result<(), Error>),
+    Start(Result<(), Error>),
     Beacon(Result<(), Error>),
     Get(PIBProperty, Result<PIBValue, Error>),
     Set(PIBProperty, Result<(), Error>),

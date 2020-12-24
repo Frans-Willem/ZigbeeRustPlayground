@@ -9,14 +9,14 @@ mod ieee802154;
 mod pack;
 mod radio;
 mod unique_key;
-use futures::select;
+use futures::{future, select};
 use ieee802154::mac;
 use ieee802154::mac::pib::PIBProperty;
 use ieee802154::{ShortAddress, PANID};
 
-use radio::RadioResponse;
+use radio::{RadioRequest, RadioResponse};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 enum MainloopInput {
@@ -48,10 +48,19 @@ async fn mainloop(
         }))
         .await
         .unwrap();
+    /*
     mlme_requests
         .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::MacPanId,
             value: PANID(0x1234).into(),
+        }))
+        .await
+        .unwrap();
+        */
+    mlme_requests
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::MacAssociationPermit,
+            value: true.into(),
         }))
         .await
         .unwrap();
@@ -63,8 +72,40 @@ async fn mainloop(
         .await
         .unwrap();
     mlme_requests
-        .send(mac::mlme::Request::Get(mac::mlme::GetRequest {
-            attribute: PIBProperty::MacExtendedAddress,
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::MacShortAddress,
+            value: ShortAddress(0x0000).into(),
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::MacBeaconPayload,
+            value: vec![
+                0x00, 0x22, 0x84, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF,
+                0x00,
+            ]
+            .into(),
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+            attribute: PIBProperty::MacBeaconAutoRespond,
+            value: true.into(),
+        }))
+        .await
+        .unwrap();
+    mlme_requests
+        .send(mac::mlme::Request::Start(mac::mlme::StartRequest {
+            pan_id: PANID(0x1234),
+            channel_number: 25,
+            channel_page: 0,
+            start_time: 0,
+            beacon_order: 15,
+            superframe_order: 15,
+            pan_coordinator: true,
+            battery_life_extension: false,
         }))
         .await
         .unwrap();
@@ -113,15 +154,8 @@ fn main() {
     let (radio_requests, radio_responses) = radio::start_radio(exec.clone(), portin, portout);
 
     let capture = pcap::Capture::dead(pcap::Linktype(195)).unwrap();
-    let capture = Mutex::new(capture);
-    /*let savefile = capture.savefile("test.pcap").unwrap();
-    let savefile = Mutex::new(savefile);
-    */
-
-    /*
-    let packet_data = vec![0x03, 0x08, 0xa5, 0xff, 0xff, 0xff, 0xff, 0x07, 0xc4, 0xeb];
-    drop(savefile);
-    */
+    let capture = Arc::new(Mutex::new(capture));
+    let capture2 = capture.clone();
 
     let radio_responses = radio_responses.map(move |response| {
         if let RadioResponse::OnPacket(packet) = &response {
@@ -149,6 +183,35 @@ fn main() {
             savefile.write(&packet);
         }
         response
+    });
+    let capture = capture2;
+
+    let radio_requests = radio_requests.with(move |request| {
+        if let RadioRequest::SendPacket(token, packet) = &request {
+            println!("Writing debug packet");
+            let mut packet_data = packet.clone();
+            packet_data.push(0);
+            packet_data.push(0 | 0x80);
+            let header = pcap::PacketHeader {
+                ts: libc::timeval {
+                    tv_sec: 0,
+                    tv_usec: 0,
+                },
+                caplen: packet_data.len() as u32,
+                len: packet_data.len() as u32,
+            };
+            let packet = pcap::Packet {
+                header: &header,
+                data: &packet_data,
+            };
+            let mut savefile = capture
+                .lock()
+                .unwrap()
+                .savefile_append("test.pcap")
+                .unwrap();
+            savefile.write(&packet);
+        }
+        future::ready(Ok(request))
     });
 
     let (mlme_requests_in, mlme_requests_out) = mpsc::unbounded();

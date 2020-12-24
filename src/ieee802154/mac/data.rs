@@ -188,7 +188,7 @@ impl<P: Pack> Pack for Frame<P> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SlicePayload<'t>(&'t [u8]);
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VecPayload(Vec<u8>);
+pub struct VecPayload(pub Vec<u8>);
 
 impl Pack for VecPayload {
     fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
@@ -201,13 +201,14 @@ impl Pack for VecPayload {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Beacon {
+pub struct Beacon<P> {
     pub beacon_order: usize,
     pub superframe_order: usize,
     pub final_cap_slot: usize,
     pub battery_life_extension: bool,
     pub pan_coordinator: bool,
     pub association_permit: bool,
+    pub payload: P,
 }
 
 bitfield! {
@@ -223,7 +224,7 @@ bitfield! {
     pub association_permit, set_association_permit: 15, 15;
 }
 
-impl Pack for Beacon {
+impl<P: Pack> Pack for Beacon<P> {
     fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
         let ((ss, gts, pending_addresses), data) =
             <(SuperframeSpecification, u8, u8)>::unpack(data)?;
@@ -232,6 +233,7 @@ impl Pack for Beacon {
                 "Non-zero GTS or pending-addresses not yet supported",
             )));
         }
+        let (payload, data) = <P>::unpack(data)?;
         Ok((
             Beacon {
                 beacon_order: ss.beacon_order() as usize,
@@ -240,6 +242,7 @@ impl Pack for Beacon {
                 battery_life_extension: ss.battery_life_extension() != 0,
                 pan_coordinator: ss.pan_coordinator() != 0,
                 association_permit: ss.association_permit() != 0,
+                payload,
             },
             data,
         ))
@@ -268,7 +271,8 @@ impl Pack for Beacon {
         ss.set_reserved(0);
         ss.set_pan_coordinator(self.pan_coordinator as u16);
         ss.set_association_permit(self.association_permit as u16);
-        (ss, 0_u8, 0_u8).pack(target)
+        let target = (ss, 0_u8, 0_u8).pack(target)?;
+        self.payload.pack(target)
     }
 }
 
@@ -276,11 +280,11 @@ impl Pack for Beacon {
 #[tag_type(u8)]
 pub enum FrameType<P> {
     #[tag(0)]
-    Beacon(Beacon),
+    Beacon(Beacon<P>),
     #[tag(1)]
     Data(P),
     #[tag(2)]
-    Ack,
+    Ack(P),
     #[tag(3)]
     Command(Command),
     #[tag(4)]

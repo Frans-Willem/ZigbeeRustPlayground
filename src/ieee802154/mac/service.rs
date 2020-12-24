@@ -4,6 +4,7 @@ use crate::ieee802154::mac::mlme;
 use crate::ieee802154::mac::pib;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::pack::Pack;
+use crate::pack::VecPackTarget;
 use crate::radio::{
     RadioError, RadioPacket, RadioParam, RadioParamType, RadioParamValue, RadioRequest,
     RadioResponse, RadioRxMode,
@@ -289,16 +290,32 @@ impl MacData {
         println!("Frame: {:?} + {:?}", frame, rest);
         match &frame.frame_type {
             data::FrameType::Command(commands::Command::BeaconRequest()) => {
-                let request = mlme::Indication::BeaconRequest {
-                    beacon_type: mlme::BeaconType::Beacon, // NOTE: Cheating, we should check the frame more carefully.
-                    src_addr: frame.source,
-                    dst_pan_id: frame
-                        .destination
-                        .map_or(PANID::broadcast(), |full_address| full_address.pan_id),
-                };
-                self.mlme_indications.send(request).await.unwrap();
+                self.process_packet_beaconrequest(&frame).await
             }
             _ => {}
+        }
+    }
+
+    async fn process_packet_beaconrequest(&mut self, frame: &data::Frame<data::VecPayload>) {
+        let beacon_type = mlme::BeaconType::Beacon; // NOTE: Cheating, we should check the frame more carefully.
+        if self.pib.mac_beacon_auto_respond {
+            let request = mlme::BeaconRequest {
+                beacon_type,
+                channel: self.pib.phy_current_channel,
+                channel_page: 0,
+                superframe_order: 15,
+                dst_addr: frame.source.clone(),
+            };
+            self.process_mlme_request_beacon(request).await;
+        } else {
+            let indication = mlme::Indication::BeaconRequest {
+                beacon_type: mlme::BeaconType::Beacon,
+                src_addr: frame.source,
+                dst_pan_id: frame
+                    .destination
+                    .map_or(PANID::broadcast(), |full_address| full_address.pan_id),
+            };
+            self.mlme_indications.send(indication).await.unwrap();
         }
     }
 
@@ -308,6 +325,7 @@ impl MacData {
             mlme::Request::Reset(request) => self.process_mlme_request_reset(request).await,
             mlme::Request::Get(request) => self.process_mlme_request_get(request).await,
             mlme::Request::Set(request) => self.process_mlme_request_set(request).await,
+            mlme::Request::Start(request) => self.process_mlme_request_start(request).await,
             request => println!("Unhandled MLME request: {:?}", request),
         }
     }
@@ -328,10 +346,12 @@ impl MacData {
             superframe_order: request.superframe_order,
             final_cap_slot: 15,
             battery_life_extension: false,
-            pan_coordinator: true, // Not sure how to set this parameter correctly :/
+            pan_coordinator: self.pib.mac_associated_pan_coord
+                == Some((self.pib.mac_extended_address, self.pib.mac_short_address)),
             association_permit: self.pib.mac_association_permit,
+            payload: data::VecPayload(self.pib.mac_beacon_payload.clone()),
         };
-        let _frame = data::Frame::<data::VecPayload> {
+        let frame = data::Frame::<data::VecPayload> {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(self.pib.next_beacon_sequence_nr()),
@@ -346,6 +366,13 @@ impl MacData {
             }),
             frame_type: data::FrameType::<data::VecPayload>::Beacon(beacon),
         };
+        let packet: Vec<u8> = frame.pack(VecPackTarget::new()).unwrap().into();
+
+        self.radio
+            .send(RadioRequest::SendPacket(UniqueKey::new(), packet))
+            .await
+            .unwrap();
+
         self.mlme_confirms
             .send(mlme::Confirm::Beacon(Ok(())))
             .await
@@ -363,7 +390,39 @@ impl MacData {
             .unwrap();
     }
 
-    async fn process_mlme_request_start() {}
+    async fn process_mlme_request_start(&mut self, request: mlme::StartRequest) {
+        if self.pib.mac_short_address == ShortAddress(0xFFFF) {
+            self.mlme_confirms
+                .send(mlme::Confirm::Start(Err(mlme::Error::NoShortAddress)))
+                .await
+                .unwrap();
+            return;
+        }
+        if request.channel_page != 0
+            || request.start_time != 0
+            || request.beacon_order != 15
+            || request.superframe_order != 15
+            || request.pan_coordinator != true
+            || request.battery_life_extension != false
+        {
+            self.mlme_confirms
+                .send(mlme::Confirm::Start(Err(mlme::Error::InvalidParameter)))
+                .await
+                .unwrap();
+            return;
+        }
+        self.pib.phy_current_channel = request.channel_number;
+        self.pib.mac_pan_id = request.pan_id;
+        if request.pan_coordinator {
+            self.pib.mac_associated_pan_coord =
+                Some((self.pib.mac_extended_address, self.pib.mac_short_address));
+        }
+        self.update_radio_params().await;
+        self.mlme_confirms
+            .send(mlme::Confirm::Start(Ok(())))
+            .await
+            .unwrap();
+    }
 
     async fn process_mlme_request_get(&mut self, request: mlme::GetRequest) {
         let result = self
