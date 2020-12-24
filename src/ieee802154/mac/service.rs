@@ -304,7 +304,7 @@ impl MacData {
                 channel: self.pib.phy_current_channel,
                 channel_page: 0,
                 superframe_order: 15,
-                dst_addr: frame.source.clone(),
+                dst_addr: frame.source,
             };
             self.process_mlme_request_beacon(request).await;
         } else {
@@ -402,8 +402,8 @@ impl MacData {
             || request.start_time != 0
             || request.beacon_order != 15
             || request.superframe_order != 15
-            || request.pan_coordinator != true
-            || request.battery_life_extension != false
+            || !request.pan_coordinator
+            || request.battery_life_extension
         {
             self.mlme_confirms
                 .send(mlme::Confirm::Start(Err(mlme::Error::InvalidParameter)))

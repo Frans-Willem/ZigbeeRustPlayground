@@ -53,14 +53,14 @@ pub struct AssociationRequest {
 impl Pack for AssociationRequest {
     fn unpack(data: &[u8]) -> Result<(Self, &[u8]), UnpackError> {
         let (capability_information, data) = u8::unpack(data)?;
-        let reserved = capability_information & 1;
+        let _reserved = capability_information & 1;
         let (device_type, data) = DeviceType::unpack_data((capability_information >> 1) & 1, data)?;
         let (power_source, data) =
             PowerSource::unpack_data((capability_information >> 2) & 1, data)?;
         let receiver_on_when_idle = (capability_information >> 3) & 1 != 0;
         let (association_type, data) =
             AssociationType::unpack_data((capability_information >> 4) & 1, data)?;
-        let reserved2 = (capability_information >> 5) & 1;
+        let _reserved2 = (capability_information >> 5) & 1;
         let security_capable = (capability_information >> 6) & 1 != 0;
         let allocate_address = (capability_information >> 7) & 1 != 0;
         Ok((

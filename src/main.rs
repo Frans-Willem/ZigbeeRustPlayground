@@ -187,7 +187,7 @@ fn main() {
     let capture = capture2;
 
     let radio_requests = radio_requests.with(move |request| {
-        if let RadioRequest::SendPacket(token, packet) = &request {
+        if let RadioRequest::SendPacket(_token, packet) = &request {
             println!("Writing debug packet");
             let mut packet_data = packet.clone();
             packet_data.push(0);
