@@ -17,6 +17,7 @@ use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::marker::Unpin;
 
@@ -143,6 +144,8 @@ struct MacData {
     mlme_indications: Box<dyn Sink<mlme::Indication, Error = mpsc::SendError> + Unpin + Send>,
     radio_param_cache: HashMap<RadioParam, RadioParamValue>,
     radio_param_updating: HashSet<RadioParam>,
+    packet_queue: VecDeque<Vec<u8>>,
+    packet_in_progress: Option<UniqueKey>,
 }
 
 #[derive(Debug)]
@@ -213,6 +216,29 @@ impl MacData {
             mlme_indications,
             radio_param_cache: HashMap::new(),
             radio_param_updating: HashSet::new(),
+            packet_queue: VecDeque::new(),
+            packet_in_progress: None,
+        }
+    }
+
+    async fn queue_packet(&mut self, data: Vec<u8>) {
+        self.packet_queue.push_back(data);
+        self.flush_packet().await;
+    }
+
+    async fn queue_frame(&mut self, frame: data::Frame) {
+        let packet: Vec<u8> = frame.pack(VecPackTarget::new()).unwrap().into();
+        self.queue_packet(packet).await
+    }
+
+    async fn flush_packet(&mut self) {
+        if let (None, Some(front)) = (self.packet_in_progress, self.packet_queue.front()) {
+            let token = UniqueKey::new();
+            self.packet_in_progress = Some(token);
+            self.radio
+                .send(RadioRequest::SendPacket(token, front.clone()))
+                .await
+                .unwrap();
         }
     }
 
@@ -272,18 +298,48 @@ impl MacData {
     async fn process_radio_response(&mut self, response: RadioResponse) {
         match response {
             RadioResponse::OnPacket(p) => self.process_packet(p).await,
-            RadioResponse::SetParam(_, param, result) => {
-                if let Ok(value) = result {
-                    self.radio_param_cache.insert(param, value);
-                } else {
-                    self.radio_param_cache.remove(&param);
-                }
-                self.radio_param_updating.remove(&param);
-                self.update_radio_params().await;
+            RadioResponse::SetParam(token, param, result) => {
+                self.process_radio_response_setparam(token, param, result)
+                    .await
+            }
+            RadioResponse::SendPacket(token, result) => {
+                self.process_radio_response_sendpacket(token, result).await
             }
             r => println!("Unhandled radio response: {:?}", r),
         }
     }
+
+    async fn process_radio_response_setparam(
+        &mut self,
+        _token: UniqueKey,
+        param: RadioParam,
+        result: Result<RadioParamValue, RadioError>,
+    ) {
+        if let Ok(value) = result {
+            self.radio_param_cache.insert(param, value);
+        } else {
+            self.radio_param_cache.remove(&param);
+        }
+        self.radio_param_updating.remove(&param);
+        self.update_radio_params().await;
+    }
+
+    async fn process_radio_response_sendpacket(
+        &mut self,
+        token: UniqueKey,
+        result: Result<(), RadioError>,
+    ) {
+        if Some(token) == self.packet_in_progress {
+            self.packet_in_progress = None;
+            if let Err(err) = result {
+                println!("MAC: Error while sending packet: {:?}", err);
+            } else {
+                self.packet_queue.pop_front();
+            }
+            self.flush_packet().await;
+        }
+    }
+
     async fn process_packet(&mut self, packet: RadioPacket) {
         println!("Packet! {:?}", packet);
         let (frame, rest) = data::Frame::unpack(&packet.data).unwrap();
@@ -366,12 +422,7 @@ impl MacData {
             }),
             frame_type: data::FrameType::Beacon(beacon),
         };
-        let packet: Vec<u8> = frame.pack(VecPackTarget::new()).unwrap().into();
-
-        self.radio
-            .send(RadioRequest::SendPacket(UniqueKey::new(), packet))
-            .await
-            .unwrap();
+        self.queue_frame(frame).await;
 
         self.mlme_confirms
             .send(mlme::Confirm::Beacon(Ok(())))
