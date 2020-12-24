@@ -260,7 +260,7 @@ impl MacQueue {
                 } else {
                     self.frames.remove(&to_send.key);
                     if device_queue.is_empty() {
-                        let destination = destination.clone();
+                        let destination = *destination;
                         self.device_queues.remove(&destination);
                     }
                     return Some(to_send);
@@ -272,7 +272,7 @@ impl MacQueue {
 
     fn insert(&mut self, entry: MacQueueEntry) -> bool {
         let key = entry.key;
-        let destination = entry.destination.clone();
+        let destination = entry.destination;
         if let Some(old_destination) = self.frames.insert(key, destination) {
             self.frames.insert(key, old_destination);
             false
@@ -300,7 +300,7 @@ impl MacQueue {
         let mut set = HashSet::new();
         for (destination, device_queue) in self.device_queues.iter() {
             if device_queue.is_pending_indirect() {
-                set.insert(destination.clone());
+                set.insert(*destination);
             }
         }
         set
