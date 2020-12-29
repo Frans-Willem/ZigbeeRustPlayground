@@ -25,11 +25,9 @@ use std::marker::Unpin;
 use std::pin::Pin;
 
 // TODO:
-// - Data pending bits to radio handling
 // - Ack handling
 // - Ack timeout handling
 // - Data timeout handling
-// - Split out bits and pieces of submodules (e.g. queue handling?)
 
 /**
  * Quickly gets a parameter from the radio,

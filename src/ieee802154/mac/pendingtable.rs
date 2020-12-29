@@ -157,8 +157,6 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> PendingTable<T> {
                 self.updating = None;
                 if !result {
                     self.table[index].dirty = true;
-                } else {
-                    println!("Pending table updated {:?}", index);
                 }
                 self.wake();
             }
@@ -184,7 +182,6 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> Stream for PendingTable<T> {
                     let value = this.table[index].value.clone();
                     let key = UniqueKey::new();
                     this.updating = Some((key, index));
-                    println!("Pending table updating {:?}", index);
                     return Poll::Ready(Some(PendingTableUpdate {
                         key,
                         index,

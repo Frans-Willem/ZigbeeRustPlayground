@@ -68,7 +68,7 @@ impl MacDeviceQueue {
         } else if let Some(head) = self.queue.front() {
             if head.indirect == datarequest {
                 if head.acknowledge_request {
-                    //self.waiting_for_ack = true;
+                    self.waiting_for_ack = true;
                     Some((head.clone(), self.is_pending_indirect()))
                 } else {
                     self.queue.pop_front().map(|x| (x, self.is_pending_indirect()))

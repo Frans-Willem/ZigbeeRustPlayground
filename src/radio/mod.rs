@@ -312,8 +312,8 @@ impl RadioRequest {
                 {
                     let mut data = vec![(index as u8) & 0x7F];
                     if let Some((pan_id, short_address)) = address {
-                        data.extend_from_slice(pan_id.to_be_bytes().as_ref());
-                        data.extend_from_slice(short_address.to_be_bytes().as_ref());
+                        data.extend_from_slice(pan_id.to_le_bytes().as_ref());
+                        data.extend_from_slice(short_address.to_le_bytes().as_ref());
                     }
                     data
                 },
@@ -326,9 +326,8 @@ impl RadioRequest {
                 {
                     let mut data = vec![(index as u8) | 0x80];
                     if let Some(address) = address {
-                        data.extend_from_slice(address.to_be_bytes().as_ref());
+                        data.extend_from_slice(address.to_le_bytes().as_ref());
                     }
-                    println!("Data: {:?}", data);
                     data
                 },
                 Box::new(move |response| {
