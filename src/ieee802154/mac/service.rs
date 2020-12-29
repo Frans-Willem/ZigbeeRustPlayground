@@ -717,7 +717,7 @@ impl MacData {
             if source_pan_id != PANID::broadcast() {
                 println!("Warning: Source PAN ID was not correctly set to broadcast");
             }
-            let device_address = device_address.clone();
+            let device_address = device_address;
             let capability_information = capability_information.clone();
             self.send_indication(mlme::Indication::Associate {
                 device_address,

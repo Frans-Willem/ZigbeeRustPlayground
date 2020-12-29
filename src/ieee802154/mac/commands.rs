@@ -1,4 +1,4 @@
-use crate::ieee802154::{ExtendedAddress, ShortAddress};
+use crate::ieee802154::{ShortAddress};
 use crate::pack::{ExtEnum, Pack, PackError, PackTagged, PackTarget, UnpackError};
 
 // IEEE Std 802.15.4 - 2015: 7.5.1
