@@ -138,6 +138,8 @@ pub enum RadioRequest {
     InitPendingDataTable(UniqueKey),
     SetPower(UniqueKey, bool),
     SendPacket(UniqueKey, Vec<u8>),
+    SetPendingShort(UniqueKey, usize, Option<(u16, u16)>),
+    SetPendingExtended(UniqueKey, usize, Option<u64>),
 }
 
 #[derive(Debug)]
@@ -148,6 +150,8 @@ pub enum RadioResponse {
     SetPower(UniqueKey, bool, Result<(), RadioError>),
     SendPacket(UniqueKey, Result<(), RadioError>),
     OnPacket(RadioPacket),
+    SetPendingShort(UniqueKey, Result<(), RadioError>),
+    SetPendingExtended(UniqueKey, Result<(), RadioError>),
 }
 
 #[derive(Debug)]
@@ -301,6 +305,34 @@ impl RadioRequest {
                 packet,
                 Box::new(move |response| {
                     RadioResponse::SendPacket(token, unpack_result_only_retval(0, response))
+                }),
+            ),
+            RadioRequest::SetPendingShort(token, index, address) => (
+                RawRadioCommand::SetPending,
+                {
+                    let mut data = vec![(index as u8) & 0x7F];
+                    if let Some((pan_id, short_address)) = address {
+                        data.extend_from_slice(pan_id.to_be_bytes().as_ref());
+                        data.extend_from_slice(short_address.to_be_bytes().as_ref());
+                    }
+                    data
+                },
+                Box::new(move |response| {
+                    RadioResponse::SetPendingShort(token, unpack_result_only_retval(0, response))
+                }),
+            ),
+            RadioRequest::SetPendingExtended(token, index, address) => (
+                RawRadioCommand::SetPending,
+                {
+                    let mut data = vec![(index as u8) | 0x80];
+                    if let Some(address) = address {
+                        data.extend_from_slice(address.to_be_bytes().as_ref());
+                    }
+                    println!("Data: {:?}", data);
+                    data
+                },
+                Box::new(move |response| {
+                    RadioResponse::SetPendingExtended(token, unpack_result_only_retval(0, response))
                 }),
             ),
         }
