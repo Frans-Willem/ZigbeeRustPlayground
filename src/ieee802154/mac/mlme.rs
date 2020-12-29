@@ -1,7 +1,8 @@
+use crate::ieee802154::mac::commands::{AssociationError, CapabilityInformation};
 use crate::ieee802154::mac::data::FullAddress;
 use crate::ieee802154::mac::pib::{PIBProperty, PIBValue};
 
-use crate::ieee802154::PANID;
+use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 
 #[derive(Debug)]
 pub enum BeaconType {
@@ -92,4 +93,29 @@ pub enum Indication {
         src_addr: Option<FullAddress>,
         dst_pan_id: PANID,
     },
+    Associate {
+        device_address: ExtendedAddress,
+        capability_information: CapabilityInformation, // 7.5.2
+    },
+}
+
+#[derive(Debug)]
+pub enum Response {
+    Associate {
+        device_address: ExtendedAddress,
+        fast_association: bool,
+        status: Result<Option<ShortAddress>, AssociationError>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Input {
+    Request(Request),
+    Response(Response),
+}
+
+#[derive(Debug)]
+pub enum Output {
+    Confirm(Confirm),
+    Indication(Indication),
 }

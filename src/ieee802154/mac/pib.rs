@@ -315,10 +315,4 @@ impl PIB {
             _ => Err(mlme::Error::UnsupportedAttribute),
         }
     }
-
-    pub fn next_beacon_sequence_nr(&mut self) -> u8 {
-        let ret = self.mac_bsn;
-        self.mac_bsn = self.mac_bsn.wrapping_add(1);
-        ret
-    }
 }

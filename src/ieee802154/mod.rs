@@ -27,6 +27,14 @@ impl ShortAddress {
     pub fn broadcast() -> Self {
         ShortAddress(0xFFFF)
     }
+
+    pub fn invalid() -> Self {
+        ShortAddress(0xFFFF)
+    }
+
+    pub fn none_assigned() -> Self {
+        ShortAddress(0xFFFE)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Pack)]

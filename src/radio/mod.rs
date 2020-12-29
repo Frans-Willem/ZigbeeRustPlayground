@@ -332,7 +332,6 @@ async fn radio_request_task<W: AsyncWrite + Unpin, S: Stream<Item = RadioRequest
             request_id,
             data,
         };
-        println!("RAWRADIO >> {:?}", request);
         if let Err(e) = port.send(request).await {
             println!("Unable to send: {:?}", e);
         }
@@ -352,7 +351,6 @@ async fn radio_response_task<R: AsyncRead + Unpin, S: Sink<RadioResponse> + Unpi
             request_id,
             data,
         } = port.next().await.unwrap();
-        println!("RAWRADIO << {:?} {:?} {:?}", command_id, request_id, data);
         match command_id {
             RawRadioCommand::Ok => {
                 if let Some(parser) = responsemap.lock().await.remove(&request_id) {

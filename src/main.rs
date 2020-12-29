@@ -24,6 +24,25 @@ enum MainloopInput {
     MlmeIndication(mac::mlme::Indication),
 }
 
+async fn send_request(
+    mlme_input: &mut (dyn Sink<mac::mlme::Input, Error = mpsc::SendError> + Unpin + Send),
+    request: mac::mlme::Request,
+) {
+    mlme_input
+        .send(mac::mlme::Input::Request(request))
+        .await
+        .unwrap();
+}
+async fn send_response(
+    mlme_input: &mut (dyn Sink<mac::mlme::Input, Error = mpsc::SendError> + Unpin + Send),
+    response: mac::mlme::Response,
+) {
+    mlme_input
+        .send(mac::mlme::Input::Response(response))
+        .await
+        .unwrap();
+}
+
 /**
  * Normal startup described in 6.3.3.1 of 802.15.4-2015:
  * - MLME-RESET with SetDefaultPIB = TRUE
@@ -31,73 +50,71 @@ enum MainloopInput {
  */
 
 async fn mainloop(
-    mut mlme_requests: Box<dyn Sink<mac::mlme::Request, Error = mpsc::SendError> + Unpin + Send>,
-    mlme_confirms: Box<dyn Stream<Item = mac::mlme::Confirm> + Unpin + Send>,
-    mlme_indications: Box<dyn Stream<Item = mac::mlme::Indication> + Unpin + Send>,
+    mut mlme_input: Box<dyn Sink<mac::mlme::Input, Error = mpsc::SendError> + Unpin + Send>,
+    mlme_output: Box<dyn Stream<Item = mac::mlme::Output> + Unpin + Send>,
 ) {
-    mlme_requests
-        .send(mac::mlme::Request::Reset(mac::mlme::ResetRequest {
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Reset(mac::mlme::ResetRequest {
             set_default_pib: true,
-        }))
-        .await
-        .unwrap();
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::PhyCurrentChannel,
             value: 25_u16.into(),
-        }))
-        .await
-        .unwrap();
-    /*
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
-            attribute: PIBProperty::MacPanId,
-            value: PANID(0x1234).into(),
-        }))
-        .await
-        .unwrap();
-        */
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::MacAssociationPermit,
             value: true.into(),
-        }))
-        .await
-        .unwrap();
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::MacShortAddress,
             value: ShortAddress(0x0000).into(),
-        }))
-        .await
-        .unwrap();
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::MacShortAddress,
             value: ShortAddress(0x0000).into(),
-        }))
-        .await
-        .unwrap();
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::MacBeaconPayload,
             value: vec![
                 0x00, 0x22, 0x84, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF,
                 0x00,
             ]
             .into(),
-        }))
-        .await
-        .unwrap();
-    mlme_requests
-        .send(mac::mlme::Request::Set(mac::mlme::SetRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Set(mac::mlme::SetRequest {
             attribute: PIBProperty::MacBeaconAutoRespond,
             value: true.into(),
-        }))
-        .await
-        .unwrap();
-    mlme_requests
-        .send(mac::mlme::Request::Start(mac::mlme::StartRequest {
+        }),
+    )
+    .await;
+    send_request(
+        mlme_input.as_mut(),
+        mac::mlme::Request::Start(mac::mlme::StartRequest {
             pan_id: PANID(0x1234),
             channel_number: 25,
             channel_page: 0,
@@ -106,17 +123,15 @@ async fn mainloop(
             superframe_order: 15,
             pan_coordinator: true,
             battery_life_extension: false,
-        }))
-        .await
-        .unwrap();
-    let mut mlme_confirms = mlme_confirms.fuse();
-    let mut mlme_indications = mlme_indications.fuse();
+        }),
+    )
+    .await;
+    let mut mlme_output = mlme_output.fuse();
     while let Some(input) = select! {
-        x = mlme_confirms.next() => x.map(MainloopInput::MlmeConfirm),
-        x = mlme_indications.next() => x.map(MainloopInput::MlmeIndication),
+        x = mlme_output.next() => x,
     } {
         match input {
-            MainloopInput::MlmeIndication(mac::mlme::Indication::BeaconRequest {
+            mac::mlme::Output::Indication(mac::mlme::Indication::BeaconRequest {
                 beacon_type,
                 src_addr: _,
                 dst_pan_id: _,
@@ -129,10 +144,22 @@ async fn mainloop(
                     superframe_order: 15,
                     dst_addr: None,
                 };
-                mlme_requests
-                    .send(mac::mlme::Request::Beacon(request))
-                    .await
-                    .unwrap();
+                send_request(mlme_input.as_mut(), mac::mlme::Request::Beacon(request)).await;
+            }
+            mac::mlme::Output::Indication(mac::mlme::Indication::Associate {
+                device_address,
+                capability_information,
+            }) => {
+                let address = ShortAddress(0x4567);
+                send_response(
+                    mlme_input.as_mut(),
+                    mac::mlme::Response::Associate {
+                        device_address,
+                        fast_association: capability_information.fast_association,
+                        status: Ok(Some(address)),
+                    },
+                )
+                .await;
             }
             input => println!("Mainloop unhandled input: {:?}", input),
         }
@@ -159,7 +186,6 @@ fn main() {
 
     let radio_responses = radio_responses.map(move |response| {
         if let RadioResponse::OnPacket(packet) = &response {
-            println!("Writing debug packet");
             let mut packet_data = packet.data.clone();
             packet_data.push(packet.rssi);
             packet_data.push(packet.link_quality | 0x80);
@@ -188,7 +214,6 @@ fn main() {
 
     let radio_requests = radio_requests.with(move |request| {
         if let RadioRequest::SendPacket(_token, packet) = &request {
-            println!("Writing debug packet");
             let mut packet_data = packet.clone();
             packet_data.push(0);
             packet_data.push(0 | 0x80);
@@ -214,23 +239,17 @@ fn main() {
         future::ready(Ok(request))
     });
 
-    let (mlme_requests_in, mlme_requests_out) = mpsc::unbounded();
-    let (mlme_confirms_in, mlme_confirms_out) = mpsc::unbounded();
-    let (mlme_indications_in, mlme_indications_out) = mpsc::unbounded();
+    let (mlme_input_in, mlme_input_out) = mpsc::unbounded();
+    let (mlme_output_in, mlme_output_out) = mpsc::unbounded();
     println!("Done?");
     exec.spawn(mac::service::start(
         Box::new(radio_requests),
         Box::new(radio_responses),
-        Box::new(mlme_requests_out),
-        Box::new(mlme_confirms_in),
-        Box::new(mlme_indications_in),
+        Box::new(mlme_input_out),
+        Box::new(mlme_output_in),
     ))
     .unwrap();
-    exec.spawn(mainloop(
-        Box::new(mlme_requests_in),
-        Box::new(mlme_confirms_out),
-        Box::new(mlme_indications_out),
-    ))
-    .unwrap();
+    exec.spawn(mainloop(Box::new(mlme_input_in), Box::new(mlme_output_out)))
+        .unwrap();
     task::block_on(exec);
 }
