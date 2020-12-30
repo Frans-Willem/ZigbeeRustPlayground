@@ -2,8 +2,8 @@ use crate::ieee802154::frame;
 use crate::unique_key::UniqueKey;
 use futures::stream::{FusedStream, Stream, StreamExt};
 use futures::task::{Context, Poll, Waker};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::Hash;
+use std::collections::{HashMap, VecDeque};
+
 use std::pin::Pin;
 use crate::ieee802154::mac::pendingtable::PendingTable;
 use crate::ieee802154::{PANID, ShortAddress, ExtendedAddress};
@@ -127,7 +127,7 @@ impl MacQueue {
             Some(frame::FullAddress { pan_id, address }) => {
                 match address {
 
-                    frame::Address::Short(address) => self.pending_short.contains(&(pan_id.clone(), address.clone())),
+                    frame::Address::Short(address) => self.pending_short.contains(&(*pan_id, *address)),
                     frame::Address::Extended(address) => self.pending_extended.contains(address),
                 }
             }
@@ -140,7 +140,7 @@ impl MacQueue {
             Some(frame::FullAddress { pan_id, address }) => {
                 match address {
 
-                    frame::Address::Short(address) => self.pending_short.promote(&(pan_id.clone(), address.clone())),
+                    frame::Address::Short(address) => self.pending_short.promote(&(*pan_id, *address)),
                     frame::Address::Extended(address) => self.pending_extended.promote(address),
                 }
             }
@@ -153,7 +153,7 @@ impl MacQueue {
             Some(frame::FullAddress { pan_id, address }) => {
                 match address {
 
-                    frame::Address::Short(address) => self.pending_short.set(&(pan_id.clone(), address.clone()), pending),
+                    frame::Address::Short(address) => self.pending_short.set(&(*pan_id, *address), pending),
                     frame::Address::Extended(address) => self.pending_extended.set(address, pending),
                 }
             }
@@ -192,7 +192,7 @@ impl MacQueue {
             ret = device_queue.pop_to_send(false);
             if let Some((to_send, _)) = &ret {
                 if device_queue.is_empty() {
-                    let destination = destination.clone();
+                    let destination = *destination;
                     self.device_queues.remove(&destination);
                 }
                 if to_send.acknowledge_request {

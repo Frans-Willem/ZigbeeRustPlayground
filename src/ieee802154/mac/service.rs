@@ -14,14 +14,14 @@ use futures::channel::mpsc;
 use futures::future::FutureExt;
 use futures::select;
 use futures::sink::{Sink, SinkExt};
-use futures::stream::{FusedStream, Stream, StreamExt};
-use futures::task::{Context, Poll, Waker};
+use futures::stream::{Stream, StreamExt};
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::marker::Unpin;
-use std::pin::Pin;
+
 
 // TODO:
 // - Ack handling

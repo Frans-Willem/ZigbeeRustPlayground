@@ -58,7 +58,7 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> PendingTable<T> {
      * Gets index in table for value, or None if not present in table.
      */
     fn get_index(&self, value: &T) -> Option<usize> {
-        for index in (0..self.table.len()) {
+        for index in 0..self.table.len() {
             if let Some(current_value) = &self.table[index].value {
                 if current_value == value {
                     return Some(index);
@@ -176,7 +176,7 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> Stream for PendingTable<T> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = Pin::into_inner(self);
         if this.updating.is_none() {
-            for index in (0..this.table.len()) {
+            for index in 0..this.table.len() {
                 if this.table[index].dirty {
                     this.table[index].dirty = false;
                     let value = this.table[index].value.clone();
@@ -191,7 +191,7 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> Stream for PendingTable<T> {
             }
         }
         this.waker = Some(cx.waker().clone());
-        return Poll::Pending;
+        Poll::Pending
     }
 }
 
