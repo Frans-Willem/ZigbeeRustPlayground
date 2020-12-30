@@ -11,7 +11,8 @@ mod radio;
 mod unique_key;
 use futures::{future, select};
 use ieee802154::mac;
-use ieee802154::mac::pib::PIBProperty;
+use ieee802154::services::mlme;
+use ieee802154::pib::PIBProperty;
 use ieee802154::{ShortAddress, PANID};
 
 use radio::{RadioRequest, RadioResponse};
@@ -20,25 +21,25 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 enum MainloopInput {
-    MlmeConfirm(mac::mlme::Confirm),
-    MlmeIndication(mac::mlme::Indication),
+    MlmeConfirm(mlme::Confirm),
+    MlmeIndication(mlme::Indication),
 }
 
 async fn send_request(
-    mlme_input: &mut (dyn Sink<mac::mlme::Input, Error = mpsc::SendError> + Unpin + Send),
-    request: mac::mlme::Request,
+    mlme_input: &mut (dyn Sink<mlme::Input, Error = mpsc::SendError> + Unpin + Send),
+    request: mlme::Request,
 ) {
     mlme_input
-        .send(mac::mlme::Input::Request(request))
+        .send(mlme::Input::Request(request))
         .await
         .unwrap();
 }
 async fn send_response(
-    mlme_input: &mut (dyn Sink<mac::mlme::Input, Error = mpsc::SendError> + Unpin + Send),
-    response: mac::mlme::Response,
+    mlme_input: &mut (dyn Sink<mlme::Input, Error = mpsc::SendError> + Unpin + Send),
+    response: mlme::Response,
 ) {
     mlme_input
-        .send(mac::mlme::Input::Response(response))
+        .send(mlme::Input::Response(response))
         .await
         .unwrap();
 }
@@ -50,19 +51,19 @@ async fn send_response(
  */
 
 async fn mainloop(
-    mut mlme_input: Box<dyn Sink<mac::mlme::Input, Error = mpsc::SendError> + Unpin + Send>,
-    mlme_output: Box<dyn Stream<Item = mac::mlme::Output> + Unpin + Send>,
+    mut mlme_input: Box<dyn Sink<mlme::Input, Error = mpsc::SendError> + Unpin + Send>,
+    mlme_output: Box<dyn Stream<Item = mlme::Output> + Unpin + Send>,
 ) {
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Reset(mac::mlme::ResetRequest {
+        mlme::Request::Reset(mlme::ResetRequest {
             set_default_pib: true,
         }),
     )
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Set(mac::mlme::SetRequest {
+        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::PhyCurrentChannel,
             value: 25_u16.into(),
         }),
@@ -70,7 +71,7 @@ async fn mainloop(
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Set(mac::mlme::SetRequest {
+        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::MacAssociationPermit,
             value: true.into(),
         }),
@@ -78,7 +79,7 @@ async fn mainloop(
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Set(mac::mlme::SetRequest {
+        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::MacShortAddress,
             value: ShortAddress(0x0000).into(),
         }),
@@ -86,7 +87,7 @@ async fn mainloop(
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Set(mac::mlme::SetRequest {
+        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::MacShortAddress,
             value: ShortAddress(0x0000).into(),
         }),
@@ -94,7 +95,7 @@ async fn mainloop(
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Set(mac::mlme::SetRequest {
+        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::MacBeaconPayload,
             value: vec![
                 0x00, 0x22, 0x84, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF,
@@ -106,7 +107,7 @@ async fn mainloop(
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Set(mac::mlme::SetRequest {
+        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::MacBeaconAutoRespond,
             value: true.into(),
         }),
@@ -114,7 +115,7 @@ async fn mainloop(
     .await;
     send_request(
         mlme_input.as_mut(),
-        mac::mlme::Request::Start(mac::mlme::StartRequest {
+        mlme::Request::Start(mlme::StartRequest {
             pan_id: PANID(0x1234),
             channel_number: 25,
             channel_page: 0,
@@ -131,29 +132,29 @@ async fn mainloop(
         x = mlme_output.next() => x,
     } {
         match input {
-            mac::mlme::Output::Indication(mac::mlme::Indication::BeaconRequest {
+            mlme::Output::Indication(mlme::Indication::BeaconRequest {
                 beacon_type,
                 src_addr: _,
                 dst_pan_id: _,
             }) => {
                 println!("Beacon request!");
-                let request = mac::mlme::BeaconRequest {
+                let request = mlme::BeaconRequest {
                     beacon_type,
                     channel: 25,
                     channel_page: 0,
                     superframe_order: 15,
                     dst_addr: None,
                 };
-                send_request(mlme_input.as_mut(), mac::mlme::Request::Beacon(request)).await;
+                send_request(mlme_input.as_mut(), mlme::Request::Beacon(request)).await;
             }
-            mac::mlme::Output::Indication(mac::mlme::Indication::Associate {
+            mlme::Output::Indication(mlme::Indication::Associate {
                 device_address,
                 capability_information,
             }) => {
                 let address = ShortAddress(0x4567);
                 send_response(
                     mlme_input.as_mut(),
-                    mac::mlme::Response::Associate {
+                    mlme::Response::Associate {
                         device_address,
                         fast_association: capability_information.fast_association,
                         status: Ok(Some(address)),

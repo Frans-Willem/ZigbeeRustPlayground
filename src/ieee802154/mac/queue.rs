@@ -1,4 +1,4 @@
-use crate::ieee802154::mac::data;
+use crate::ieee802154::frame;
 use crate::unique_key::UniqueKey;
 use futures::stream::{FusedStream, Stream, StreamExt};
 use futures::task::{Context, Poll, Waker};
@@ -8,14 +8,17 @@ use std::pin::Pin;
 use crate::ieee802154::mac::pendingtable::PendingTable;
 use crate::ieee802154::{PANID, ShortAddress, ExtendedAddress};
 
+// TODO:
+// - Check MacQueue wake behaviour.
+
 #[derive(Clone, Debug)]
 pub struct MacQueueEntry {
     pub key: UniqueKey,
-    pub destination: Option<data::FullAddress>,
-    pub source_mode: data::AddressingMode,
+    pub destination: Option<frame::FullAddress>,
+    pub source_mode: frame::AddressingMode,
     pub acknowledge_request: bool,
     pub indirect: bool,
-    pub content: data::FrameType,
+    pub content: frame::FrameType,
 }
 
 struct MacDeviceQueue {
@@ -98,8 +101,8 @@ impl MacDeviceQueue {
 }
 
 pub struct MacQueue {
-    frames: HashMap<UniqueKey, Option<data::FullAddress>>,
-    device_queues: HashMap<Option<data::FullAddress>, MacDeviceQueue>,
+    frames: HashMap<UniqueKey, Option<frame::FullAddress>>,
+    device_queues: HashMap<Option<frame::FullAddress>, MacDeviceQueue>,
     waker: Option<Waker>,
     pending_none: bool,
     pending_short: PendingTable<(PANID, ShortAddress)>,
@@ -118,40 +121,40 @@ impl MacQueue {
         }
     }
 
-    pub fn is_pending_indirect(&self, destination: &Option<data::FullAddress>,) -> bool {
+    pub fn is_pending_indirect(&self, destination: &Option<frame::FullAddress>,) -> bool {
         match destination {
             None => self.pending_none,
-            Some(data::FullAddress { pan_id, address }) => {
+            Some(frame::FullAddress { pan_id, address }) => {
                 match address {
 
-                    data::Address::Short(address) => self.pending_short.contains(&(pan_id.clone(), address.clone())),
-                    data::Address::Extended(address) => self.pending_extended.contains(address),
+                    frame::Address::Short(address) => self.pending_short.contains(&(pan_id.clone(), address.clone())),
+                    frame::Address::Extended(address) => self.pending_extended.contains(address),
                 }
             }
         }
     }
 
-    pub fn promote_pending(&mut self, destination: &Option<data::FullAddress>,) -> bool {
+    pub fn promote_pending(&mut self, destination: &Option<frame::FullAddress>,) -> bool {
         match destination {
             None => self.pending_none,
-            Some(data::FullAddress { pan_id, address }) => {
+            Some(frame::FullAddress { pan_id, address }) => {
                 match address {
 
-                    data::Address::Short(address) => self.pending_short.promote(&(pan_id.clone(), address.clone())),
-                    data::Address::Extended(address) => self.pending_extended.promote(address),
+                    frame::Address::Short(address) => self.pending_short.promote(&(pan_id.clone(), address.clone())),
+                    frame::Address::Extended(address) => self.pending_extended.promote(address),
                 }
             }
         }
     }
 
-    fn set_pending(&mut self, destination: &Option<data::FullAddress>, pending: bool) {
+    fn set_pending(&mut self, destination: &Option<frame::FullAddress>, pending: bool) {
         match destination {
             None => self.pending_none = pending,
-            Some(data::FullAddress { pan_id, address }) => {
+            Some(frame::FullAddress { pan_id, address }) => {
                 match address {
 
-                    data::Address::Short(address) => self.pending_short.set(&(pan_id.clone(), address.clone()), pending),
-                    data::Address::Extended(address) => self.pending_extended.set(address, pending),
+                    frame::Address::Short(address) => self.pending_short.set(&(pan_id.clone(), address.clone()), pending),
+                    frame::Address::Extended(address) => self.pending_extended.set(address, pending),
                 }
             }
         }
@@ -209,8 +212,12 @@ impl MacQueue {
 
     pub fn pop_datarequest(
         &mut self,
-        destination: &Option<data::FullAddress>,
+        destination: &Option<frame::FullAddress>,
     ) -> Option<MacQueueEntry> {
+        // TODO: If the pending_data bit wasn't set in the DataRequest ACK,
+        // the device's radio will probably turn off.
+        // We should check if the device is in the current pending data table, and has been
+        // correctly flushed to the radio device, before attempting to send a packet.
         let mut ret = None;
         if let Some(device_queue) = self.device_queues.get_mut(destination) {
             ret = device_queue.pop_to_send(true);
@@ -284,14 +291,6 @@ impl Stream for MacQueue {
         if let Poll::Ready(Some(update)) = this.pending_extended.poll_next_unpin(cx) {
             return Poll::Ready(Some(MacQueueAction::SetPendingExtended(update.key, update.index, update.value)));
         }
-        /*
-        if let Some((index, address)) = this.pending_short.pop_update() {
-            return Poll::Ready(Some(MacQueueAction::SetPendingShort(index, address)));
-        }
-        if let Some((index, address)) = this.pending_extended.pop_update() {
-            return Poll::Ready(Some(MacQueueAction::SetPendingExtended(index, address)));
-        }
-        */
         this.waker = Some(cx.waker().clone());
         Poll::Pending
     }

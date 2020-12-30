@@ -1,4 +1,4 @@
-use crate::ieee802154::mac::mlme;
+use crate::ieee802154::services::mlme;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use rand::random;
 use std::convert::TryInto;

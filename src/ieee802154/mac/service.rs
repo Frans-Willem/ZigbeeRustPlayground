@@ -1,7 +1,6 @@
-use crate::ieee802154::mac::commands;
-use crate::ieee802154::mac::data;
-use crate::ieee802154::mac::mlme;
-use crate::ieee802154::mac::pib;
+use crate::ieee802154::frame;
+use crate::ieee802154::services::mlme;
+use crate::ieee802154::pib;
 use crate::ieee802154::mac::queue::{MacQueue, MacQueueAction, MacQueueEntry};
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::pack::Pack;
@@ -251,20 +250,20 @@ impl MacData {
         }
     }
 
-    fn get_full_short_address(&self) -> data::FullAddress {
-        data::FullAddress {
+    fn get_full_short_address(&self) -> frame::FullAddress {
+        frame::FullAddress {
             pan_id: self.pib.mac_pan_id,
             address: if self.pib.mac_short_address != ShortAddress::none_assigned() {
-                data::Address::Short(self.pib.mac_short_address)
+                frame::Address::Short(self.pib.mac_short_address)
             } else {
-                data::Address::Extended(self.pib.mac_extended_address)
+                frame::Address::Extended(self.pib.mac_extended_address)
             },
         }
     }
-    fn get_full_extended_address(&self) -> data::FullAddress {
-        data::FullAddress {
+    fn get_full_extended_address(&self) -> frame::FullAddress {
+        frame::FullAddress {
             pan_id: self.pib.mac_pan_id,
-            address: data::Address::Extended(self.pib.mac_extended_address),
+            address: frame::Address::Extended(self.pib.mac_extended_address),
         }
     }
 
@@ -273,7 +272,7 @@ impl MacData {
         self.flush_packet().await;
     }
 
-    async fn queue_frame(&mut self, frame: data::Frame) {
+    async fn queue_frame(&mut self, frame: frame::Frame) {
         let packet: Vec<u8> = frame.pack(VecPackTarget::new()).unwrap().into();
         self.queue_packet(packet).await
     }
@@ -316,12 +315,12 @@ impl MacData {
 
     async fn queue_entry(&mut self, entry: MacQueueEntry) {
         let source = match entry.source_mode {
-            data::AddressingMode::None => None,
-            data::AddressingMode::Reserved => None,
-            data::AddressingMode::Short => Some(self.get_full_short_address()),
-            data::AddressingMode::Extended => Some(self.get_full_extended_address()),
+            frame::AddressingMode::None => None,
+            frame::AddressingMode::Reserved => None,
+            frame::AddressingMode::Short => Some(self.get_full_short_address()),
+            frame::AddressingMode::Extended => Some(self.get_full_extended_address()),
         };
-        let frame = data::Frame {
+        let frame = frame::Frame {
             frame_pending: self.queue.is_pending_indirect(&entry.destination),
             acknowledge_request: entry.acknowledge_request,
             sequence_number: Some(self.next_data_sequence_nr()),
@@ -441,22 +440,22 @@ impl MacData {
     }
 
     async fn process_packet(&mut self, packet: RadioPacket) {
-        let (frame, rest) = data::Frame::unpack(&packet.data).unwrap();
+        let (frame, rest) = frame::Frame::unpack(&packet.data).unwrap();
         match &frame.frame_type {
-            data::FrameType::Command(commands::Command::BeaconRequest()) => {
+            frame::FrameType::Command(frame::Command::BeaconRequest()) => {
                 self.process_packet_beaconrequest(&frame).await
             }
-            data::FrameType::Command(commands::Command::AssociationRequest(req)) => {
+            frame::FrameType::Command(frame::Command::AssociationRequest(req)) => {
                 self.process_packet_associationrequest(&frame, req).await
             }
-            data::FrameType::Command(commands::Command::DataRequest()) => {
+            frame::FrameType::Command(frame::Command::DataRequest()) => {
                 self.process_packet_datarequest(&frame).await
             }
             _ => println!("Unhandled: {:?} + {:?}", frame, rest),
         }
     }
 
-    async fn process_packet_beaconrequest(&mut self, frame: &data::Frame) {
+    async fn process_packet_beaconrequest(&mut self, frame: &frame::Frame) {
         let beacon_type = mlme::BeaconType::Beacon; // NOTE: Cheating, we should check the frame more carefully.
         if self.pib.mac_beacon_auto_respond {
             let request = mlme::BeaconRequest {
@@ -481,8 +480,8 @@ impl MacData {
 
     async fn process_packet_associationrequest(
         &mut self,
-        frame: &data::Frame,
-        capability_information: &commands::CapabilityInformation,
+        frame: &frame::Frame,
+        capability_information: &frame::CapabilityInformation,
     ) {
         if !self.pib.mac_association_permit {
             println!("Ignoring: Association not allowed");
@@ -492,9 +491,9 @@ impl MacData {
             println!("Ignoring: Association request not meant for me");
             return;
         }
-        if let Some(data::FullAddress {
+        if let Some(frame::FullAddress {
             pan_id: source_pan_id,
-            address: data::Address::Extended(device_address),
+            address: frame::Address::Extended(device_address),
         }) = frame.source
         {
             if source_pan_id != PANID::broadcast() {
@@ -512,7 +511,7 @@ impl MacData {
         }
     }
 
-    async fn process_packet_datarequest(&mut self, frame: &data::Frame) {
+    async fn process_packet_datarequest(&mut self, frame: &frame::Frame) {
         println!("Data request: {:?}", frame.source);
         if let Some(to_send) = self.queue.pop_datarequest(&frame.source) {
             self.queue_entry(to_send).await;
@@ -539,7 +538,7 @@ impl MacData {
                 .await;
             return;
         }
-        let beacon = data::Beacon {
+        let beacon = frame::Beacon {
             beacon_order: 15,
             superframe_order: request.superframe_order,
             final_cap_slot: 15,
@@ -547,15 +546,15 @@ impl MacData {
             pan_coordinator: self.pib.mac_associated_pan_coord
                 == Some((self.pib.mac_extended_address, self.pib.mac_short_address)),
             association_permit: self.pib.mac_association_permit,
-            payload: data::Payload(self.pib.mac_beacon_payload.clone()),
+            payload: frame::Payload(self.pib.mac_beacon_payload.clone()),
         };
-        let frame = data::Frame {
+        let frame = frame::Frame {
             frame_pending: false,
             acknowledge_request: false,
             sequence_number: Some(self.next_beacon_sequence_nr()),
             destination: None,
             source: Some(self.get_full_short_address()),
-            frame_type: data::FrameType::Beacon(beacon),
+            frame_type: frame::FrameType::Beacon(beacon),
         };
         self.queue_frame(frame).await;
 
@@ -630,23 +629,23 @@ impl MacData {
         &mut self,
         device_address: ExtendedAddress,
         fast_association: bool,
-        status: Result<Option<ShortAddress>, commands::AssociationError>,
+        status: Result<Option<ShortAddress>, frame::AssociationError>,
     ) {
         let status = status.map(|addr| addr.unwrap_or(ShortAddress::none_assigned()));
-        let command = commands::Command::AssociationResponse(commands::AssociationResponse {
+        let command = frame::Command::AssociationResponse(frame::AssociationResponse {
             fast_association,
             status,
         });
         let entry = MacQueueEntry {
             key: UniqueKey::new(),
-            destination: Some(data::FullAddress {
+            destination: Some(frame::FullAddress {
                 pan_id: self.pib.mac_pan_id,
-                address: data::Address::Extended(device_address),
+                address: frame::Address::Extended(device_address),
             }),
-            source_mode: data::AddressingMode::Extended,
+            source_mode: frame::AddressingMode::Extended,
             acknowledge_request: true,
             indirect: !fast_association,
-            content: data::FrameType::Command(command),
+            content: frame::FrameType::Command(command),
         };
         println!("Inserted: {:?}", entry);
         self.queue.insert(entry);
