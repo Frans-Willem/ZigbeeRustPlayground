@@ -4,9 +4,9 @@ use futures::stream::{FusedStream, Stream, StreamExt};
 use futures::task::{Context, Poll, Waker};
 use std::collections::{HashMap, VecDeque};
 
-use std::pin::Pin;
 use crate::ieee802154::mac::pendingtable::PendingTable;
-use crate::ieee802154::{PANID, ShortAddress, ExtendedAddress};
+use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use std::pin::Pin;
 
 // TODO:
 // - Check MacQueue wake behaviour.
@@ -74,7 +74,9 @@ impl MacDeviceQueue {
                     self.waiting_for_ack = true;
                     Some((head.clone(), self.is_pending_indirect()))
                 } else {
-                    self.queue.pop_front().map(|x| (x, self.is_pending_indirect()))
+                    self.queue
+                        .pop_front()
+                        .map(|x| (x, self.is_pending_indirect()))
                 }
             } else {
                 None
@@ -83,17 +85,12 @@ impl MacDeviceQueue {
             None
         }
     }
-
-    fn acknowledge_timeout(&mut self) {
-        self.waiting_for_ack = false;
-    }
-
-    fn acknowledge(&mut self, key: UniqueKey) {
+    fn acknowledge_timeout(&mut self, key: UniqueKey) {
+        // NOTE: For successful acknowledgements, purge is just (ab)used
         if self.waiting_for_ack {
             if let Some(head) = self.queue.front() {
                 if head.key == key {
                     self.waiting_for_ack = false;
-                    self.queue.pop_front();
                 }
             }
         }
@@ -121,44 +118,36 @@ impl MacQueue {
         }
     }
 
-    pub fn is_pending_indirect(&self, destination: &Option<frame::FullAddress>,) -> bool {
+    pub fn is_pending_indirect(&self, destination: &Option<frame::FullAddress>) -> bool {
         match destination {
             None => self.pending_none,
-            Some(frame::FullAddress { pan_id, address }) => {
-                match address {
-
-                    frame::Address::Short(address) => self.pending_short.contains(&(*pan_id, *address)),
-                    frame::Address::Extended(address) => self.pending_extended.contains(address),
-                }
-            }
+            Some(frame::FullAddress { pan_id, address }) => match address {
+                frame::Address::Short(address) => self.pending_short.contains(&(*pan_id, *address)),
+                frame::Address::Extended(address) => self.pending_extended.contains(address),
+            },
         }
     }
 
-    pub fn promote_pending(&mut self, destination: &Option<frame::FullAddress>,) -> bool {
+    pub fn promote_pending(&mut self, destination: &Option<frame::FullAddress>) -> bool {
         match destination {
             None => self.pending_none,
-            Some(frame::FullAddress { pan_id, address }) => {
-                match address {
-
-                    frame::Address::Short(address) => self.pending_short.promote(&(*pan_id, *address)),
-                    frame::Address::Extended(address) => self.pending_extended.promote(address),
-                }
-            }
+            Some(frame::FullAddress { pan_id, address }) => match address {
+                frame::Address::Short(address) => self.pending_short.promote(&(*pan_id, *address)),
+                frame::Address::Extended(address) => self.pending_extended.promote(address),
+            },
         }
     }
 
     fn set_pending(&mut self, destination: &Option<frame::FullAddress>, pending: bool) {
         match destination {
             None => self.pending_none = pending,
-            Some(frame::FullAddress { pan_id, address }) => {
-                match address {
-
-                    frame::Address::Short(address) => self.pending_short.set(&(*pan_id, *address), pending),
-                    frame::Address::Extended(address) => self.pending_extended.set(address, pending),
+            Some(frame::FullAddress { pan_id, address }) => match address {
+                frame::Address::Short(address) => {
+                    self.pending_short.set(&(*pan_id, *address), pending)
                 }
-            }
+                frame::Address::Extended(address) => self.pending_extended.set(address, pending),
+            },
         }
-
     }
 
     fn wake(&mut self) {
@@ -268,6 +257,23 @@ impl MacQueue {
     pub fn report_set_pending_extended_result(&mut self, key: UniqueKey, result: bool) {
         self.pending_extended.report_update_result(key, result)
     }
+
+    pub fn acknowledge(&mut self, key: UniqueKey) {
+        self.purge(key);
+    }
+
+    pub fn acknowledge_timeout(&mut self, key: UniqueKey) {
+        if let Some(destination) = self.frames.get(&key) {
+            let mut is_pending_indirect = false;
+            if let Some(device_queue) = self.device_queues.get_mut(&destination) {
+                device_queue.acknowledge_timeout(key);
+                is_pending_indirect = device_queue.is_pending_indirect();
+            }
+            let destination = *destination;
+            self.set_pending(&destination, is_pending_indirect);
+            self.wake();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -286,10 +292,18 @@ impl Stream for MacQueue {
             return Poll::Ready(Some(MacQueueAction::Send(item)));
         }
         if let Poll::Ready(Some(update)) = this.pending_short.poll_next_unpin(cx) {
-            return Poll::Ready(Some(MacQueueAction::SetPendingShort(update.key, update.index, update.value)));
+            return Poll::Ready(Some(MacQueueAction::SetPendingShort(
+                update.key,
+                update.index,
+                update.value,
+            )));
         }
         if let Poll::Ready(Some(update)) = this.pending_extended.poll_next_unpin(cx) {
-            return Poll::Ready(Some(MacQueueAction::SetPendingExtended(update.key, update.index, update.value)));
+            return Poll::Ready(Some(MacQueueAction::SetPendingExtended(
+                update.key,
+                update.index,
+                update.value,
+            )));
         }
         this.waker = Some(cx.waker().clone());
         Poll::Pending

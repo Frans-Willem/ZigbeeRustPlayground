@@ -1,7 +1,7 @@
 use crate::ieee802154::frame;
-use crate::ieee802154::services::mlme;
-use crate::ieee802154::pib;
 use crate::ieee802154::mac::queue::{MacQueue, MacQueueAction, MacQueueEntry};
+use crate::ieee802154::pib;
+use crate::ieee802154::services::mlme;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::pack::Pack;
 use crate::pack::VecPackTarget;
@@ -16,12 +16,14 @@ use futures::select;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 
+use crate::delay_queue::DelayQueue;
+use bimap::BiMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::marker::Unpin;
-
+use std::time::Duration;
 
 // TODO:
 // - Ack handling
@@ -153,6 +155,8 @@ struct MacData {
     packet_queue: VecDeque<Vec<u8>>,
     packet_in_progress: Option<UniqueKey>,
     queue: MacQueue,
+    ack_timeouts: DelayQueue<UniqueKey>,
+    ack_map: BiMap<u8, UniqueKey>,
 }
 
 #[derive(Debug)]
@@ -161,6 +165,7 @@ enum MacInput {
     Request(mlme::Request),
     Response(mlme::Response),
     Queue(MacQueueAction),
+    AckTimeout(UniqueKey),
 }
 
 impl From<mlme::Input> for MacInput {
@@ -247,6 +252,8 @@ impl MacData {
             packet_queue: VecDeque::new(),
             packet_in_progress: None,
             queue: MacQueue::new(),
+            ack_timeouts: DelayQueue::new(),
+            ack_map: BiMap::new(),
         }
     }
 
@@ -320,15 +327,20 @@ impl MacData {
             frame::AddressingMode::Short => Some(self.get_full_short_address()),
             frame::AddressingMode::Extended => Some(self.get_full_extended_address()),
         };
+        let seq_nr = self.next_data_sequence_nr();
         let frame = frame::Frame {
             frame_pending: self.queue.is_pending_indirect(&entry.destination),
             acknowledge_request: entry.acknowledge_request,
-            sequence_number: Some(self.next_data_sequence_nr()),
+            sequence_number: Some(seq_nr),
             destination: entry.destination,
             source,
             frame_type: entry.content,
         };
-        println!("Queueing frame: {:?}", frame);
+        if frame.acknowledge_request {
+            self.ack_map.insert(seq_nr, entry.key);
+            self.ack_timeouts
+                .insert(entry.key, Duration::from_millis(50));
+        }
         self.queue_frame(frame).await;
     }
 
@@ -343,12 +355,14 @@ impl MacData {
             x = radio_responses.next() => x.map(Into::into),
             x = mlme_input.next() => x.map(Into::into),
             x = self.queue.next() => x.map(Into::into),
+            x = self.ack_timeouts.next() => x.map(MacInput::AckTimeout),
         } {
             match input {
                 MacInput::Radio(x) => self.process_radio_response(x).await,
                 MacInput::Request(x) => self.process_mlme_request(x).await,
                 MacInput::Response(x) => self.process_mlme_response(x).await,
                 MacInput::Queue(x) => self.process_queue(x).await,
+                MacInput::AckTimeout(x) => self.process_ack_timeout(x).await,
                 input => println!("Mac: Unhandled input: {:?}", input),
             }
         }
@@ -399,10 +413,12 @@ impl MacData {
                 self.process_radio_response_sendpacket(token, result).await
             }
             RadioResponse::SetPendingShort(token, result) => {
-                self.queue.report_set_pending_short_result(token, result.is_ok());
+                self.queue
+                    .report_set_pending_short_result(token, result.is_ok());
             }
             RadioResponse::SetPendingExtended(token, result) => {
-                self.queue.report_set_pending_extended_result(token, result.is_ok());
+                self.queue
+                    .report_set_pending_extended_result(token, result.is_ok());
             }
             r => println!("Unhandled radio response: {:?}", r),
         }
@@ -451,6 +467,7 @@ impl MacData {
             frame::FrameType::Command(frame::Command::DataRequest()) => {
                 self.process_packet_datarequest(&frame).await
             }
+            frame::FrameType::Ack(payload) => self.process_packet_ack(&frame, payload).await,
             _ => println!("Unhandled: {:?} + {:?}", frame, rest),
         }
     }
@@ -654,7 +671,8 @@ impl MacData {
     async fn process_queue(&mut self, action: MacQueueAction) {
         match action {
             MacQueueAction::SetPendingShort(token, index, value) => {
-                let request = RadioRequest::SetPendingShort(token, index, value.map(|(x,y)| (x.0, y.0)));
+                let request =
+                    RadioRequest::SetPendingShort(token, index, value.map(|(x, y)| (x.0, y.0)));
                 self.radio.send(request).await.unwrap();
             }
             MacQueueAction::SetPendingExtended(token, index, value) => {
@@ -662,6 +680,20 @@ impl MacData {
                 self.radio.send(request).await.unwrap();
             }
             x => println!("Unhandled Mac queue action: {:?}", x),
+        }
+    }
+
+    async fn process_ack_timeout(&mut self, key: UniqueKey) {
+        self.ack_map.remove_by_right(&key);
+        self.queue.acknowledge_timeout(key);
+    }
+
+    async fn process_packet_ack(&mut self, frame: &frame::Frame, payload: &frame::Payload) {
+        if let Some(seq_nr) = frame.sequence_number {
+            if let Some((seq_nr, key)) = self.ack_map.remove_by_left(&seq_nr) {
+                self.ack_timeouts.cancel(&key);
+                self.queue.acknowledge(key);
+            }
         }
     }
 }

@@ -1,7 +1,9 @@
+use crate::ieee802154::frame;
 use crate::ieee802154::services::mlme;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use rand::random;
 use std::convert::TryInto;
+use std::time::Duration;
 
 /**
  * Implements a PIB as described in 8.4 of 802.15.4-2015 standard
@@ -18,6 +20,8 @@ pub enum PIBProperty {
     MacPanId,
     MacShortAddress,
     MacBeaconAutoRespond,
+    MacTransactionPersistenceTime,
+    MacMaxFrameRetries,
     PhyCurrentChannel,
     PhyMaxTxPower,
     PhyTxPower,
@@ -29,6 +33,7 @@ pub enum PIBValue {
     U8(u8),
     U16(u16),
     Blob(Vec<u8>),
+    Duration(Duration),
     ShortAddress(ShortAddress),
     ExtendedAddress(ExtendedAddress),
     PANID(PANID),
@@ -54,6 +59,11 @@ impl From<u16> for PIBValue {
 impl From<Vec<u8>> for PIBValue {
     fn from(value: Vec<u8>) -> PIBValue {
         PIBValue::Blob(value)
+    }
+}
+impl From<Duration> for PIBValue {
+    fn from(value: Duration) -> PIBValue {
+        PIBValue::Duration(value)
     }
 }
 impl From<ShortAddress> for PIBValue {
@@ -132,6 +142,16 @@ impl TryInto<Vec<u8>> for PIBValue {
         }
     }
 }
+impl TryInto<Duration> for PIBValue {
+    type Error = ();
+    fn try_into(self) -> Result<Duration, Self::Error> {
+        if let PIBValue::Duration(x) = self {
+            Ok(x)
+        } else {
+            Err(())
+        }
+    }
+}
 impl TryInto<ShortAddress> for PIBValue {
     type Error = ();
     fn try_into(self) -> Result<ShortAddress, Self::Error> {
@@ -202,6 +222,8 @@ pub struct PIB {
     pub mac_pan_id: PANID,
     pub mac_short_address: ShortAddress,
     pub mac_beacon_auto_respond: bool,
+    pub mac_transaction_persistence_time: Duration,
+    pub mac_max_frame_retries: u16,
     pub phy_current_channel: u16,
     pub phy_max_tx_power: u16,
     pub phy_tx_power: u16,
@@ -233,6 +255,8 @@ impl PIB {
             mac_pan_id: PANID(0xFFFF),
             mac_short_address: ShortAddress(0xFFFF),
             mac_beacon_auto_respond: false,
+            mac_transaction_persistence_time: Duration::from_secs(5 * 60), // NOTE: Normal default is 500 unit periods
+            mac_max_frame_retries: 3,
             phy_current_channel,
             phy_max_tx_power,
             phy_tx_power: phy_max_tx_power,
@@ -258,6 +282,9 @@ impl PIB {
             PIBProperty::MacPanId => Ok(self.mac_pan_id.into()),
             PIBProperty::MacShortAddress => Ok(self.mac_short_address.into()),
             PIBProperty::MacBeaconAutoRespond => Ok(self.mac_beacon_auto_respond.into()),
+            PIBProperty::MacTransactionPersistenceTime => {
+                Ok(self.mac_transaction_persistence_time.into())
+            }
             PIBProperty::PhyCurrentChannel => Ok(self.phy_current_channel.into()),
             PIBProperty::PhyMaxTxPower => Ok(self.phy_max_tx_power.into()),
             PIBProperty::PhyTxPower => Ok(self.phy_tx_power.into()),
@@ -299,6 +326,11 @@ impl PIB {
                     value.try_into().or(Err(mlme::Error::InvalidParameter))?;
                 Ok(())
             }
+            PIBProperty::MacTransactionPersistenceTime => {
+                self.mac_transaction_persistence_time =
+                    value.try_into().or(Err(mlme::Error::InvalidParameter))?;
+                Ok(())
+            }
             PIBProperty::PhyCurrentChannel => {
                 self.phy_current_channel =
                     value.try_into().or(Err(mlme::Error::InvalidParameter))?;
@@ -313,6 +345,35 @@ impl PIB {
                 Ok(())
             }
             _ => Err(mlme::Error::UnsupportedAttribute),
+        }
+    }
+
+    pub fn next_beacon_sequence_nr(&mut self) -> u8 {
+        let ret = self.mac_bsn;
+        self.mac_bsn = self.mac_bsn.wrapping_add(1);
+        ret
+    }
+
+    pub fn next_data_sequence_nr(&mut self) -> u8 {
+        let ret = self.mac_dsn;
+        self.mac_dsn = self.mac_dsn.wrapping_add(1);
+        ret
+    }
+
+    pub fn get_full_short_address(&self) -> frame::FullAddress {
+        frame::FullAddress {
+            pan_id: self.mac_pan_id,
+            address: if self.mac_short_address != ShortAddress::none_assigned() {
+                frame::Address::Short(self.mac_short_address)
+            } else {
+                frame::Address::Extended(self.mac_extended_address)
+            },
+        }
+    }
+    pub fn get_full_extended_address(&self) -> frame::FullAddress {
+        frame::FullAddress {
+            pan_id: self.mac_pan_id,
+            address: frame::Address::Extended(self.mac_extended_address),
         }
     }
 }

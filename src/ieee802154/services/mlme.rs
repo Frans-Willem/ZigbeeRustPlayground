@@ -1,5 +1,5 @@
-use crate::ieee802154::frame::{AssociationError, CapabilityInformation};
 use crate::ieee802154::frame::FullAddress;
+use crate::ieee802154::frame::{AssociationError, CapabilityInformation};
 use crate::ieee802154::pib::{PIBProperty, PIBValue};
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 

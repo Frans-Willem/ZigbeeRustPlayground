@@ -1,8 +1,8 @@
-use std::hash::Hash;
-use std::collections::HashSet;
 use crate::unique_key::UniqueKey;
 use futures::stream::{FusedStream, Stream};
 use futures::task::{Context, Poll, Waker};
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::pin::Pin;
 
 struct PendingTableEntry<T> {
@@ -162,6 +162,21 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> PendingTable<T> {
             }
         }
     }
+    pub fn poll_update(&mut self, cx: &mut Context<'_>) -> Poll<PendingTableUpdate<T>> {
+        if self.updating.is_none() {
+            for index in 0..self.table.len() {
+                if self.table[index].dirty {
+                    self.table[index].dirty = false;
+                    let value = self.table[index].value.clone();
+                    let key = UniqueKey::new();
+                    self.updating = Some((key, index));
+                    return Poll::Ready(PendingTableUpdate { key, index, value });
+                }
+            }
+        }
+        self.waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
 }
 
 pub struct PendingTableUpdate<T> {
@@ -174,24 +189,10 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> Stream for PendingTable<T> {
     type Item = PendingTableUpdate<T>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = Pin::into_inner(self);
-        if this.updating.is_none() {
-            for index in 0..this.table.len() {
-                if this.table[index].dirty {
-                    this.table[index].dirty = false;
-                    let value = this.table[index].value.clone();
-                    let key = UniqueKey::new();
-                    this.updating = Some((key, index));
-                    return Poll::Ready(Some(PendingTableUpdate {
-                        key,
-                        index,
-                        value
-                    }));
-                }
-            }
+        match Pin::into_inner(self).poll_update(cx) {
+            Poll::Ready(x) => Poll::Ready(Some(x)),
+            Poll::Pending => Poll::Pending,
         }
-        this.waker = Some(cx.waker().clone());
-        Poll::Pending
     }
 }
 
