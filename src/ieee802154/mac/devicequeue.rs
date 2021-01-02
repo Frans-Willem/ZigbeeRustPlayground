@@ -39,6 +39,7 @@ pub struct DeviceQueue {
     waker: WakerStore,
 }
 
+#[derive(Debug)]
 pub enum DeviceQueueError {
     TransactionExpired, // Frame was not polled within the time allocated
     SendFailure,        // After several tries

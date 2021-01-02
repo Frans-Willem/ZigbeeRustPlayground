@@ -48,6 +48,13 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> PendingTable<T> {
         }
     }
 
+    pub fn assume_empty(&mut self) {
+        for entry in self.table.iter_mut() {
+            entry.dirty = entry.value.is_some();
+        }
+        self.wake();
+    }
+
     fn wake(&mut self) {
         if let Some(waker) = self.waker.take() {
             waker.wake()

@@ -1,23 +1,121 @@
 use crate::ieee802154::frame;
 use crate::ieee802154::mac::data::{DataRequest, DataService};
-use crate::ieee802154::pib;
+use crate::ieee802154::pib::{PIBValue, PIB};
 use crate::ieee802154::services::mlme;
-use crate::ieee802154::{ShortAddress, PANID};
+use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::radio::{RadioParam, RadioParamValue, RadioRxMode};
 use crate::unique_key::UniqueKey;
+use crate::waker_store::WakerStore;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::task::{Context, Poll};
+
+#[derive(Debug)]
+pub enum ManagementServiceAction {
+    SetParam(UniqueKey, RadioParam, RadioParamValue),
+    SendFrame(frame::Frame),
+}
+
+struct RadioParamInfo {
+    requested_value: RadioParamValue,
+    updating: Option<UniqueKey>,
+    dirty: bool,
+}
 
 pub struct ManagementService {
-    outgoing: Vec<frame::Frame>,
+    outgoing: VecDeque<frame::Frame>,
+    waker: WakerStore,
+    radio_params: HashMap<RadioParam, RadioParamInfo>,
 }
 
 impl ManagementService {
-    pub fn new(pib: &pib::PIB) -> Self {
-        Self {
-            outgoing: Vec::new(),
+    pub fn new(pib: &PIB) -> Self {
+        let mut ret = Self {
+            outgoing: VecDeque::new(),
+            waker: WakerStore::new(),
+            radio_params: HashMap::new(),
+        };
+        ret.update_radio_parameters(pib);
+        ret
+    }
+
+    fn poll_radio_param_update(&mut self, cx: &mut Context<'_>) -> Poll<ManagementServiceAction> {
+        for (param, info) in self.radio_params.iter_mut() {
+            if info.dirty && info.updating.is_none() {
+                info.dirty = false;
+                let key = UniqueKey::new();
+                info.updating = Some(key);
+                return Poll::Ready(ManagementServiceAction::SetParam(
+                    key,
+                    param.clone(),
+                    info.requested_value.clone(),
+                ));
+            }
+        }
+        // NOTE: Do not set waker, as the main poll_action will already do this.
+        Poll::Pending
+    }
+
+    pub fn process_set_param_result(&mut self, key: UniqueKey, result: bool) {
+        let mut should_wake = false;
+        for (param, info) in self.radio_params.iter_mut() {
+            if info.updating == Some(key) {
+                info.updating = None;
+                if !result {
+                    info.dirty = true;
+                }
+                should_wake = info.dirty || should_wake;
+            }
+        }
+        if should_wake {
+            self.waker.wake();
         }
     }
 
-    fn update_radio_parameters(&mut self, pib: &pib::PIB) {
-        // TODO: Update radio backed parameters from PIB.
+    pub fn poll_action(&mut self, cx: &mut Context<'_>) -> Poll<ManagementServiceAction> {
+        if let Poll::Ready(action) = self.poll_radio_param_update(cx) {
+            Poll::Ready(action)
+        } else if let Some(outgoing) = self.outgoing.pop_front() {
+            Poll::Ready(ManagementServiceAction::SendFrame(outgoing))
+        } else {
+            self.waker.pend(cx)
+        }
+    }
+
+    fn update_radio_parameter(&mut self, parameter: RadioParam, value: RadioParamValue) {
+        if let Some(current) = self.radio_params.get_mut(&parameter) {
+            if current.requested_value != value {
+                current.requested_value = value;
+                current.dirty = true;
+                self.waker.wake();
+            }
+        } else {
+            self.radio_params.insert(
+                parameter,
+                RadioParamInfo {
+                    requested_value: value,
+                    updating: None,
+                    dirty: true,
+                },
+            );
+            self.waker.wake();
+        }
+    }
+
+    fn update_radio_parameters(&mut self, pib: &PIB) {
+        self.update_radio_parameter(RadioParam::Channel, pib.phy_current_channel.into());
+        self.update_radio_parameter(RadioParam::PanId, pib.mac_pan_id.0.into());
+        self.update_radio_parameter(RadioParam::ShortAddress, pib.mac_short_address.0.into());
+        self.update_radio_parameter(
+            RadioParam::RxMode,
+            RadioRxMode {
+                address_filter: true,
+                autoack: true,
+                poll_mode: false,
+            }
+            .into(),
+        );
+        self.update_radio_parameter(RadioParam::TxPower, pib.phy_tx_power.into());
     }
 
     /**
@@ -26,7 +124,7 @@ impl ManagementService {
      */
     pub fn process_mlme_beacon_request(
         &mut self,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         request: mlme::BeaconRequest,
     ) -> Result<(), mlme::Error> {
         if request.superframe_order != 15
@@ -53,7 +151,7 @@ impl ManagementService {
             source: Some(pib.get_full_short_address()),
             frame_type: frame::FrameType::Beacon(beacon),
         };
-        self.outgoing.push(frame);
+        self.outgoing.push_back(frame);
         Ok(())
     }
 
@@ -63,7 +161,7 @@ impl ManagementService {
     pub fn process_mlme_reset_request(
         &mut self,
         data: &mut DataService,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         request: mlme::ResetRequest,
     ) -> Result<(), mlme::Error> {
         if request.set_default_pib {
@@ -79,9 +177,9 @@ impl ManagementService {
      */
     pub fn process_mlme_get_request(
         &mut self,
-        pib: &pib::PIB,
+        pib: &PIB,
         request: mlme::GetRequest,
-    ) -> Result<pib::PIBValue, mlme::Error> {
+    ) -> Result<PIBValue, mlme::Error> {
         pib.get(request.attribute)
             .or(Err(mlme::Error::UnsupportedAttribute))
     }
@@ -91,7 +189,7 @@ impl ManagementService {
      */
     pub fn process_mlme_set_request(
         &mut self,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         request: mlme::SetRequest,
     ) -> Result<(), mlme::Error> {
         let res = pib.set(request.attribute, request.value);
@@ -104,7 +202,7 @@ impl ManagementService {
      */
     pub fn process_mlme_start_request(
         &mut self,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         request: mlme::StartRequest,
     ) -> Result<(), mlme::Error> {
         if pib.mac_short_address == ShortAddress(0xFFFF) {
@@ -133,7 +231,7 @@ impl ManagementService {
      */
     pub fn process_mlme_request(
         &mut self,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         data: &mut DataService,
         request: mlme::Request,
     ) -> Option<mlme::Confirm> {
@@ -160,9 +258,59 @@ impl ManagementService {
 }
 
 impl ManagementService {
+    pub fn process_mlme_response(
+        &mut self,
+        data: &mut DataService,
+        pib: &PIB,
+        response: mlme::Response,
+    ) {
+        match response {
+            mlme::Response::Associate {
+                device_address,
+                fast_association,
+                status,
+            } => self.process_mlme_associate_response(
+                data,
+                pib,
+                device_address,
+                fast_association,
+                status,
+            ),
+        }
+    }
+
+    fn process_mlme_associate_response(
+        &mut self,
+        data: &mut DataService,
+        pib: &PIB,
+        device_address: ExtendedAddress,
+        fast_association: bool,
+        status: Result<Option<ShortAddress>, frame::AssociationError>,
+    ) {
+        let status = status.map(|addr| addr.unwrap_or(ShortAddress::none_assigned()));
+        let command = frame::Command::AssociationResponse(frame::AssociationResponse {
+            fast_association,
+            status,
+        });
+        let entry = DataRequest {
+            key: UniqueKey::new(),
+            destination: Some(frame::FullAddress {
+                pan_id: pib.mac_pan_id,
+                address: frame::Address::Extended(device_address),
+            }),
+            source_mode: frame::AddressingMode::Extended,
+            acknowledge_request: true,
+            indirect: !fast_association,
+            content: frame::FrameType::Command(command),
+        };
+        data.insert(pib, entry);
+    }
+}
+
+impl ManagementService {
     pub fn process_frame(
         &mut self,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         frame: &frame::Frame,
     ) -> Option<mlme::Indication> {
         match &frame.frame_type {
@@ -178,7 +326,7 @@ impl ManagementService {
 
     pub fn process_frame_beacon_request(
         &mut self,
-        pib: &mut pib::PIB,
+        pib: &mut PIB,
         frame: &frame::Frame,
     ) -> Option<mlme::Indication> {
         let beacon_type = mlme::BeaconType::Beacon; // NOTE: Cheating, we should check the frame more carefully.
@@ -205,7 +353,7 @@ impl ManagementService {
 
     pub fn process_frame_association_request(
         &self,
-        pib: &pib::PIB,
+        pib: &PIB,
         frame: &frame::Frame,
         capability_information: &frame::CapabilityInformation,
     ) -> Option<mlme::Indication> {

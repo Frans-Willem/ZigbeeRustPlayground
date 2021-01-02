@@ -90,14 +90,6 @@ async fn mainloop(
     send_request(
         mlme_input.as_mut(),
         mlme::Request::Set(mlme::SetRequest {
-            attribute: PIBProperty::MacShortAddress,
-            value: ShortAddress(0x0000).into(),
-        }),
-    )
-    .await;
-    send_request(
-        mlme_input.as_mut(),
-        mlme::Request::Set(mlme::SetRequest {
             attribute: PIBProperty::MacBeaconPayload,
             value: vec![
                 0x00, 0x22, 0x84, 0x15, 0x68, 0x89, 0x0e, 0x00, 0x4b, 0x12, 0x00, 0xFF, 0xFF, 0xFF,
@@ -246,10 +238,10 @@ fn main() {
     let (mlme_output_in, mlme_output_out) = mpsc::unbounded();
     println!("Done?");
     exec.spawn(mac::service::start(
-        Box::new(radio_requests),
-        Box::new(radio_responses),
-        Box::new(mlme_input_out),
-        Box::new(mlme_output_in),
+        Box::pin(radio_requests),
+        Box::pin(radio_responses),
+        Box::pin(mlme_input_out),
+        Box::pin(mlme_output_in),
     ))
     .unwrap();
     exec.spawn(mainloop(Box::new(mlme_input_in), Box::new(mlme_output_out)))

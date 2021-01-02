@@ -24,7 +24,7 @@ pub enum RadioParamType {
     U64,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum RadioParamValue {
     U16(u16),
     U32(u32),
@@ -196,7 +196,6 @@ fn unpack_result_get_param(
     param_type: RadioParamType,
     response: Result<&[u8], RadioError>,
 ) -> Result<RadioParamValue, RadioError> {
-    println!("Unpack get param: {:?}", response);
     let data = response?;
     let data = check_retval(0, data)?;
     RadioParamValue::try_from((param_type, data))

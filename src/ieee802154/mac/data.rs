@@ -9,7 +9,9 @@ use crate::waker_store::WakerStore;
 use std::collections::HashMap;
 use std::task::{Context, Poll};
 
+#[derive(Debug)]
 pub enum DataServiceAction {
+    InitPendingTable(UniqueKey),
     SetPendingShort(UniqueKey, usize, Option<(PANID, ShortAddress)>),
     SetPendingExtended(UniqueKey, usize, Option<ExtendedAddress>),
     SendFrame(UniqueKey, frame::Frame),
@@ -17,6 +19,9 @@ pub enum DataServiceAction {
 }
 
 struct CombinedPendingTable {
+    waker: WakerStore,
+    initializing: Option<UniqueKey>,
+    is_initialized: bool,
     none: bool,
     short: PendingTable<(PANID, ShortAddress)>,
     extended: PendingTable<ExtendedAddress>,
@@ -25,9 +30,25 @@ struct CombinedPendingTable {
 impl CombinedPendingTable {
     fn new() -> Self {
         Self {
+            waker: WakerStore::new(),
+            initializing: None,
+            is_initialized: false,
             none: false,
             short: PendingTable::<(PANID, ShortAddress)>::new(8),
             extended: PendingTable::<ExtendedAddress>::new(8),
+        }
+    }
+
+    fn report_init_result(&mut self, key: UniqueKey, result: bool) {
+        if self.initializing == Some(key) {
+            self.initializing = None;
+            self.is_initialized = result;
+            if result {
+                // After a init pending table, the entire table should be clear on the device side
+                self.short.assume_empty();
+                self.extended.assume_empty();
+            }
+            self.waker.wake();
         }
     }
 
@@ -44,7 +65,13 @@ impl CombinedPendingTable {
     }
 
     fn poll_action(&mut self, cx: &mut Context<'_>) -> Poll<DataServiceAction> {
-        if let Poll::Ready(update) = self.short.poll_update(cx) {
+        if self.initializing.is_some() {
+            self.waker.pend(cx)
+        } else if !self.is_initialized {
+            let key = UniqueKey::new();
+            self.initializing = Some(key);
+            Poll::Ready(DataServiceAction::InitPendingTable(key))
+        } else if let Poll::Ready(update) = self.short.poll_update(cx) {
             Poll::Ready(DataServiceAction::SetPendingShort(
                 update.key,
                 update.index,
@@ -59,6 +86,11 @@ impl CombinedPendingTable {
         } else {
             Poll::Pending
         }
+    }
+
+    fn report_update_result(&mut self, key: UniqueKey, success: bool) {
+        self.short.report_update_result(key, success);
+        self.extended.report_update_result(key, success);
     }
 }
 
@@ -129,6 +161,20 @@ impl DataService {
 }
 
 impl DataService {
+    pub fn process_init_pending_table_result(&mut self, key: UniqueKey, success: bool) {
+        self.pending_table.report_init_result(key, success)
+    }
+    pub fn process_set_pending_result(&mut self, key: UniqueKey, success: bool) {
+        self.pending_table.report_update_result(key, success)
+    }
+    pub fn process_send_result(&mut self, key: UniqueKey, success: bool) {
+        for (destination, queue) in self.queues.iter_mut() {
+            queue.process_send_result(key, success);
+        }
+    }
+}
+
+impl DataService {
     pub fn process_frame(&mut self, pib: &PIB, frame: &frame::Frame) {
         match &frame.frame_type {
             frame::FrameType::Ack(payload) => self.process_frame_ack(frame, &payload),
@@ -150,8 +196,13 @@ impl DataService {
             || frame.destination == Some(pib.get_full_extended_address())
         {
             if let Some(queue) = self.queues.get_mut(&frame.source) {
+                println!("Doing queue.process_datarequest");
                 queue.process_datarequest();
+            } else {
+                println!("WARNING!: No queue for {:?}", frame.source);
             }
+        } else {
+            println!("WARNING!: Ignoring data request as destination does not match");
         }
     }
 }
