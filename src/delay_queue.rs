@@ -1,6 +1,6 @@
-use async_std::future::TimeoutError;
+
 use async_std::task::sleep;
-use futures::future;
+
 use futures::future::BoxFuture;
 use futures::stream::{FusedStream, Stream};
 use std::pin::Pin;
@@ -34,8 +34,8 @@ impl<T> DelayQueue<T> {
     }
 
     fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<T> {
-        for index in (0..self.items.len()) {
-            if let Poll::Ready(_) = self.items[index].1.as_mut().poll(cx) {
+        for index in 0..self.items.len() {
+            if self.items[index].1.as_mut().poll(cx).is_ready() {
                 let (value, _) = self.items.swap_remove(index);
                 return Poll::Ready(value);
             }

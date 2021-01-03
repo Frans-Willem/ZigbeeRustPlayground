@@ -1,4 +1,4 @@
-use crate::delay_queue::DelayQueue;
+
 use crate::ieee802154::frame;
 use crate::ieee802154::mac::data::DataRequest;
 use crate::ieee802154::pib::PIB;
@@ -119,7 +119,7 @@ impl DeviceQueue {
     pub fn process_send_result(&mut self, key: UniqueKey, success: bool) {
         if let DeviceQueueState::Sending {
             send_key,
-            ack_requested,
+            ack_requested: _,
         } = self.state
         {
             if send_key == key {
@@ -127,21 +127,19 @@ impl DeviceQueue {
                     self.state = DeviceQueueState::HaveResult {
                         result: Ok(Vec::new()),
                     };
-                } else {
-                    if let Some(front_entry) = self.entries.front_mut() {
-                        if front_entry.data.indirect {
-                            self.state = DeviceQueueState::Idle { datarequest: false };
-                        } else if front_entry.retries_left > 0 {
-                            front_entry.retries_left = front_entry.retries_left - 1;
-                            self.state = DeviceQueueState::Idle { datarequest: false };
-                        } else {
-                            self.state = DeviceQueueState::HaveResult {
-                                result: Err(DeviceQueueError::SendFailure),
-                            };
-                        }
-                    } else {
+                } else if let Some(front_entry) = self.entries.front_mut() {
+                    if front_entry.data.indirect {
                         self.state = DeviceQueueState::Idle { datarequest: false };
+                    } else if front_entry.retries_left > 0 {
+                        front_entry.retries_left -= 1;
+                        self.state = DeviceQueueState::Idle { datarequest: false };
+                    } else {
+                        self.state = DeviceQueueState::HaveResult {
+                            result: Err(DeviceQueueError::SendFailure),
+                        };
                     }
+                } else {
+                    self.state = DeviceQueueState::Idle { datarequest: false };
                 }
             }
         }
@@ -206,7 +204,7 @@ impl DeviceQueue {
                     ack_requested,
                     mut timeout,
                 } => {
-                    if let Poll::Ready(_) = timeout.as_mut().poll(cx) {
+                    if timeout.as_mut().poll(cx).is_ready() {
                         // If timeout expired
                         if front_entry.data.indirect {
                             // Do nothing, just go back to Idle, an attempt to send will be done
@@ -214,7 +212,7 @@ impl DeviceQueue {
                         } else if front_entry.retries_left > 0 {
                             // Lower retries counter, and go back to idle to retry
                             let front_entry = self.entries.front_mut().unwrap();
-                            front_entry.retries_left = front_entry.retries_left - 1;
+                            front_entry.retries_left -= 1;
                         } else {
                             // Remove entry, report result as failed.
                             let key = front_entry.data.key;
@@ -238,9 +236,9 @@ impl DeviceQueue {
                 s => self.state = s,
             }
             // Timeout handling
-            for index in (0..self.entries.len()) {
+            for index in 0..self.entries.len() {
                 let entry = &mut self.entries[index];
-                if let Poll::Ready(_) = entry.timeout.as_mut().poll(cx) {
+                if entry.timeout.as_mut().poll(cx).is_ready() {
                     let key = entry.data.key;
                     let result = Err(DeviceQueueError::TransactionExpired);
                     self.entries.remove(index);

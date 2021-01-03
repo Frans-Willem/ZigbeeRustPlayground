@@ -57,7 +57,7 @@ impl CombinedPendingTable {
             None => self.none = inserted,
             Some(FullAddress { pan_id, address }) => match address {
                 Address::Short(address) => {
-                    self.short.set(&(pan_id.clone(), address.clone()), inserted)
+                    self.short.set(&(*pan_id, *address), inserted)
                 }
                 Address::Extended(address) => self.extended.set(address, inserted),
             },
@@ -168,7 +168,7 @@ impl DataService {
         self.pending_table.report_update_result(key, success)
     }
     pub fn process_send_result(&mut self, key: UniqueKey, success: bool) {
-        for (destination, queue) in self.queues.iter_mut() {
+        for (_destination, queue) in self.queues.iter_mut() {
             queue.process_send_result(key, success);
         }
     }
@@ -186,7 +186,7 @@ impl DataService {
     }
 
     fn process_frame_ack(&mut self, frame: &frame::Frame, payload: &frame::Payload) {
-        for (destination, queue) in self.queues.iter_mut() {
+        for (_destination, queue) in self.queues.iter_mut() {
             queue.process_acknowledge(frame.sequence_number, &payload.0);
         }
     }

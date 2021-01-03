@@ -1,4 +1,4 @@
-use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+
 use crate::ieee802154::frame::{AddressingMode, FullAddress};
 use crate::unique_key::UniqueKey;
 

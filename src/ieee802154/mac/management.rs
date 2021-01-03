@@ -39,7 +39,7 @@ impl ManagementService {
         ret
     }
 
-    fn poll_radio_param_update(&mut self, cx: &mut Context<'_>) -> Poll<ManagementServiceAction> {
+    fn poll_radio_param_update(&mut self, _cx: &mut Context<'_>) -> Poll<ManagementServiceAction> {
         for (param, info) in self.radio_params.iter_mut() {
             if info.dirty && info.updating.is_none() {
                 info.dirty = false;
@@ -47,7 +47,7 @@ impl ManagementService {
                 info.updating = Some(key);
                 return Poll::Ready(ManagementServiceAction::SetParam(
                     key,
-                    param.clone(),
+                    *param,
                     info.requested_value.clone(),
                 ));
             }
@@ -58,7 +58,7 @@ impl ManagementService {
 
     pub fn process_set_param_result(&mut self, key: UniqueKey, result: bool) {
         let mut should_wake = false;
-        for (param, info) in self.radio_params.iter_mut() {
+        for (_param, info) in self.radio_params.iter_mut() {
             if info.updating == Some(key) {
                 info.updating = None;
                 if !result {

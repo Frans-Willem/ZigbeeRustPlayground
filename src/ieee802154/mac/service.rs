@@ -1,8 +1,8 @@
 use crate::ieee802154::frame;
-use crate::ieee802154::mac::queue::{MacQueue, MacQueueAction, MacQueueEntry};
+
 use crate::ieee802154::pib;
 use crate::ieee802154::services::mlme;
-use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::ieee802154::{ExtendedAddress};
 use crate::pack::Pack;
 use crate::pack::VecPackTarget;
 use crate::radio::{
@@ -12,22 +12,22 @@ use crate::radio::{
 use crate::unique_key::UniqueKey;
 use futures::channel::mpsc;
 use futures::future::{Future, FutureExt};
-use futures::select;
-use futures::sink::{Sink, SinkExt};
-use futures::stream::{BoxStream, Stream, StreamExt};
 
-use crate::delay_queue::DelayQueue;
-use bimap::BiMap;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use futures::sink::{Sink, SinkExt};
+use futures::stream::{BoxStream, StreamExt};
+
+
+
+
+
+
 use std::convert::TryInto;
-use std::marker::Unpin;
-use std::time::Duration;
+
+
 
 use crate::ieee802154::mac::data::{DataService, DataServiceAction};
 use crate::ieee802154::mac::management::{ManagementService, ManagementServiceAction};
-use std::convert::TryFrom;
+
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -323,7 +323,7 @@ impl MacData {
     }
 
     async fn process_radio_packet(&mut self, packet: RadioPacket) {
-        let (frame, rest) = frame::Frame::unpack(&packet.data).unwrap();
+        let (frame, _rest) = frame::Frame::unpack(&packet.data).unwrap();
         println!("FRAME: {:?}", frame);
         if let Some(indication) = self.management.process_frame(&mut self.pib, &frame) {
             println!("INDICATION: {:?}", indication);
@@ -346,7 +346,7 @@ pub async fn start(
     mlme_input: BoxStream<'static, mlme::Input>,
     mlme_output: BoxSink<'static, mlme::Output, mpsc::SendError>,
 ) {
-    let mut radio_responses = radio_responses;
+    let radio_responses = radio_responses;
     let data = MacData::new(radio_requests, radio_responses, mlme_input, mlme_output).await;
     data.process().await
 }
