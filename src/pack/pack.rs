@@ -2,6 +2,7 @@ use crate::pack::{ExtEnumError, PackTarget};
 use impl_trait_for_tuples::impl_for_tuples;
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum UnpackError {
     NotEnoughData,  // Only valid for unpacking, not enough data available.
     InvalidEnumTag, // Invalid enum tag

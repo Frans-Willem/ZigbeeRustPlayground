@@ -1,11 +1,9 @@
-#![allow(dead_code)]
 use async_std::task;
 use futures::channel::mpsc;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 use futures::task::SpawnExt;
 mod async_std_executor;
-mod delay_queue;
 mod ieee802154;
 mod pack;
 mod radio;

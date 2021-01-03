@@ -12,7 +12,7 @@ impl WakerStore {
         self.storage = Some(waker.clone());
     }
     pub fn wake(&mut self) {
-        if let Some(waker) = self.storage.take() {
+        if let Some(waker) = self.take() {
             waker.wake();
         }
     }

@@ -9,6 +9,7 @@ use std::time::Duration;
  * Implements a PIB as described in 8.4 of 802.15.4-2015 standard
  * Only properties relevant to this implementation are implemented.
  */
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub enum PIBProperty {
     MacExtendedAddress,
@@ -227,16 +228,6 @@ pub struct PIB {
     pub phy_current_channel: u16,
     pub phy_max_tx_power: u16,
     pub phy_tx_power: u16,
-}
-
-impl PIBValue {
-    fn set_to<T>(self, target: &mut T) -> Result<(), ()>
-    where
-        PIBValue: TryInto<T, Error = ()>,
-    {
-        *target = self.try_into()?;
-        Ok(())
-    }
 }
 
 impl PIB {

@@ -23,6 +23,7 @@ impl Into<u16> for ShortAddress {
 }
 
 impl ShortAddress {
+    #[allow(dead_code)]
     pub fn broadcast() -> Self {
         ShortAddress(0xFFFF)
     }

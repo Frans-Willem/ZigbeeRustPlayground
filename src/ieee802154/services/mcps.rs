@@ -45,6 +45,7 @@ pub struct PurgeConfirm {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Request {
     Data(DataRequest),
     Purge(PurgeRequest),
@@ -57,6 +58,7 @@ pub enum Confirm {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Indication {
     Data(DataIndication),
 }
@@ -65,11 +67,13 @@ pub enum Indication {
 pub enum Response {}
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Input {
     Request(Request),
     Response(Response),
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum Output {
     Confirm(Confirm),

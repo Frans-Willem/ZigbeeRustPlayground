@@ -1,3 +1,4 @@
+#[allow(dead_code)] // API
 #[derive(Debug)]
 pub enum Error {
     ChannelAccessFailure,

@@ -12,6 +12,7 @@ static RADIO_MAGIC_PREFIX: &[u8] = b"ZPB";
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, ExtEnum)]
 #[tag_type(u8)]
+#[allow(dead_code)]
 pub enum RawRadioCommand {
     Prepare = 0,
     Transmit = 1,
@@ -37,6 +38,7 @@ pub struct RawRadioMessage {
     pub data: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RawRadioParam {
     PowerMode = 0,

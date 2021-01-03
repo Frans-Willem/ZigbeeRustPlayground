@@ -70,10 +70,6 @@ impl SyncRadio {
         let untyped_result = self.get_param(param, RadioParamType::U64).await?;
         untyped_result.try_into()
     }
-    async fn get_param_u32(&mut self, param: RadioParam) -> Result<u32, RadioError> {
-        let untyped_result = self.get_param(param, RadioParamType::U32).await?;
-        untyped_result.try_into()
-    }
     async fn get_param_u16(&mut self, param: RadioParam) -> Result<u16, RadioError> {
         let untyped_result = self.get_param(param, RadioParamType::U16).await?;
         untyped_result.try_into()

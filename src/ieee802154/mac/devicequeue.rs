@@ -141,15 +141,24 @@ impl DeviceQueue {
     pub fn process_send_result(&mut self, key: UniqueKey, success: bool) {
         if let DeviceQueueState::Sending {
             send_key,
-            ack_requested: _,
+            ack_requested,
             ack_payload,
         } = &self.state
         {
             if *send_key == key {
                 if success {
-                    self.state = DeviceQueueState::HaveResult {
-                        result: Ok(ack_payload.clone()),
-                    };
+                    if let Some(ack_requested) = *ack_requested {
+                        self.state = DeviceQueueState::WaitingForAck {
+                            ack_requested,
+                            timeout: Box::pin(async_std::task::sleep(
+                                std::time::Duration::from_millis(100),
+                            )),
+                        };
+                    } else {
+                        self.state = DeviceQueueState::HaveResult {
+                            result: Ok(ack_payload.clone()),
+                        };
+                    }
                 } else if let Some(front_entry) = self.entries.front_mut() {
                     if front_entry.data.indirect {
                         self.state = DeviceQueueState::Idle { datarequest: false };

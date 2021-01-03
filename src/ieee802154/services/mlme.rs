@@ -5,6 +5,7 @@ pub use crate::ieee802154::services::error::Error;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum BeaconType {
     Beacon,
     EnhancedBeacon,
@@ -58,6 +59,7 @@ pub struct SetRequest {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Request {
     Reset(ResetRequest),
     Start(StartRequest),

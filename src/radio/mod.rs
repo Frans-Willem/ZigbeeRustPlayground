@@ -18,6 +18,7 @@ use std::marker::Unpin;
 pub type RadioParam = RawRadioParam;
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum RadioParamType {
     U16,
     U32,

@@ -131,10 +131,6 @@ impl<T: Clone + Hash + PartialEq + Eq + Unpin> PendingTable<T> {
         inserted
     }
 
-    pub fn contains(&self, value: &T) -> bool {
-        self.values.contains(value)
-    }
-
     pub fn remove(&mut self, value: &T) -> bool {
         if self.values.remove(value) {
             if let Some(index) = self.get_index(value) {
