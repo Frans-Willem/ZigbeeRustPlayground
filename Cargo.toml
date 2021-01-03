@@ -20,3 +20,4 @@ impl-trait-for-tuples = "0.1"
 bitfield = "0.13"
 pcap = { version = "0.7", features = ["pcap-savefile-append"] }
 libc = "^0.2"
+bimap = "^0.5"
