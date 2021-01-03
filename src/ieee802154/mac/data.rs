@@ -1,9 +1,10 @@
 use crate::ieee802154::frame;
-use crate::ieee802154::frame::{Address, AddressingMode, FrameType, FullAddress};
+use crate::ieee802154::frame::{AddressingMode, FrameType, FullAddress};
 use crate::ieee802154::mac::devicequeue::{DeviceQueue, DeviceQueueAction, DeviceQueueError};
-use crate::ieee802154::mac::pendingtable::PendingTable;
 use crate::ieee802154::pib::PIB;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::ieee802154::services::mcps;
+use crate::ieee802154::mac::combinedpendingtable::{CombinedPendingTable, CombinedPendingTableAction};
 use crate::unique_key::UniqueKey;
 use crate::waker_store::WakerStore;
 use std::collections::HashMap;
@@ -18,79 +19,13 @@ pub enum DataServiceAction {
     ReportResult(UniqueKey, Result<Vec<u8>, DeviceQueueError>),
 }
 
-struct CombinedPendingTable {
-    waker: WakerStore,
-    initializing: Option<UniqueKey>,
-    is_initialized: bool,
-    none: bool,
-    short: PendingTable<(PANID, ShortAddress)>,
-    extended: PendingTable<ExtendedAddress>,
-}
-
-impl CombinedPendingTable {
-    fn new() -> Self {
-        Self {
-            waker: WakerStore::new(),
-            initializing: None,
-            is_initialized: false,
-            none: false,
-            short: PendingTable::<(PANID, ShortAddress)>::new(8),
-            extended: PendingTable::<ExtendedAddress>::new(8),
+impl From<CombinedPendingTableAction> for DataServiceAction {
+    fn from(action: CombinedPendingTableAction) -> DataServiceAction {
+        match action {
+            CombinedPendingTableAction::Init(x) => DataServiceAction::InitPendingTable(x),
+            CombinedPendingTableAction::UpdateShort(k,i,v) => DataServiceAction::SetPendingShort(k,i,v),
+            CombinedPendingTableAction::UpdateExtended(k,i,v) => DataServiceAction::SetPendingExtended(k,i,v),
         }
-    }
-
-    fn report_init_result(&mut self, key: UniqueKey, result: bool) {
-        if self.initializing == Some(key) {
-            self.initializing = None;
-            self.is_initialized = result;
-            if result {
-                // After a init pending table, the entire table should be clear on the device side
-                self.short.assume_empty();
-                self.extended.assume_empty();
-            }
-            self.waker.wake();
-        }
-    }
-
-    fn set(&mut self, address: &Option<FullAddress>, inserted: bool) {
-        match address {
-            None => self.none = inserted,
-            Some(FullAddress { pan_id, address }) => match address {
-                Address::Short(address) => {
-                    self.short.set(&(*pan_id, *address), inserted)
-                }
-                Address::Extended(address) => self.extended.set(address, inserted),
-            },
-        }
-    }
-
-    fn poll_action(&mut self, cx: &mut Context<'_>) -> Poll<DataServiceAction> {
-        if self.initializing.is_some() {
-            self.waker.pend(cx)
-        } else if !self.is_initialized {
-            let key = UniqueKey::new();
-            self.initializing = Some(key);
-            Poll::Ready(DataServiceAction::InitPendingTable(key))
-        } else if let Poll::Ready(update) = self.short.poll_update(cx) {
-            Poll::Ready(DataServiceAction::SetPendingShort(
-                update.key,
-                update.index,
-                update.value,
-            ))
-        } else if let Poll::Ready(update) = self.extended.poll_update(cx) {
-            Poll::Ready(DataServiceAction::SetPendingExtended(
-                update.key,
-                update.index,
-                update.value,
-            ))
-        } else {
-            Poll::Pending
-        }
-    }
-
-    fn report_update_result(&mut self, key: UniqueKey, success: bool) {
-        self.short.report_update_result(key, success);
-        self.extended.report_update_result(key, success);
     }
 }
 
@@ -132,7 +67,7 @@ impl DataService {
     pub fn poll_action(&mut self, pib: &mut PIB, cx: &mut Context<'_>) -> Poll<DataServiceAction> {
         'retry: loop {
             if let Poll::Ready(x) = self.pending_table.poll_action(cx) {
-                return Poll::Ready(x);
+                return Poll::Ready(x.into());
             }
             for (destination, queue) in self.queues.iter_mut() {
                 if let Poll::Ready(x) = queue.poll_next_action(pib, cx) {
@@ -203,6 +138,19 @@ impl DataService {
             }
         } else {
             println!("WARNING!: Ignoring data request as destination does not match");
+        }
+    }
+}
+
+impl DataService {
+    pub fn process_mcps_request(&mut self, request: mcps::Request) -> Option<mcps::Confirm> {
+        // TODO
+        None
+    }
+
+    pub fn process_mcps_response(&mut self, response: mcps::Response) {
+        match response 
+        {
         }
     }
 }

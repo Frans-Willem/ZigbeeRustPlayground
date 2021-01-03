@@ -236,12 +236,16 @@ fn main() {
 
     let (mlme_input_in, mlme_input_out) = mpsc::unbounded();
     let (mlme_output_in, mlme_output_out) = mpsc::unbounded();
+    let (mcps_input_in, mcps_input_out) = mpsc::unbounded();
+    let (mcps_output_in, mcps_output_out) = mpsc::unbounded();
     println!("Done?");
     exec.spawn(mac::service::start(
         Box::pin(radio_requests),
         Box::pin(radio_responses),
         Box::pin(mlme_input_out),
         Box::pin(mlme_output_in),
+        Box::pin(mcps_input_out),
+        Box::pin(mcps_output_in),
     ))
     .unwrap();
     exec.spawn(mainloop(Box::new(mlme_input_in), Box::new(mlme_output_out)))

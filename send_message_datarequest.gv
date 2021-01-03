@@ -1,0 +1,13 @@
+digraph "G" {
+	"Idle"
+	"Waiting for device"
+	"Sending"
+
+	"Idle" -> "Waiting for device" [label="Enqueue && NeedWait: SetPending"]
+	"Idle" -> "Sending" [label="Enqueue && !NeedWait: StartSend, SetPending"]
+	"Waiting for device" -> "Sending" [label="DataRequest: StartSend"]
+	"Sending" -> "Idle" [label="Send OK: Report OK"]
+	"Sending" -> "Waiting for device" [label="Send ERR && retries>0"]
+	"Sending" -> "Idle" [label="Send ERR && retries==0: Report ERR"]
+
+}

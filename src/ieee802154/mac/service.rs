@@ -1,33 +1,20 @@
 use crate::ieee802154::frame;
-
-use crate::ieee802154::pib;
-use crate::ieee802154::services::mlme;
-use crate::ieee802154::{ExtendedAddress};
-use crate::pack::Pack;
-use crate::pack::VecPackTarget;
+use crate::ieee802154::mac::data::{DataService, DataServiceAction};
+use crate::ieee802154::mac::management::{ManagementService, ManagementServiceAction};
+use crate::ieee802154::pib::PIB;
+use crate::ieee802154::services::{mcps, mlme};
+use crate::ieee802154::ExtendedAddress;
+use crate::pack::{Pack, VecPackTarget};
 use crate::radio::{
     RadioError, RadioPacket, RadioParam, RadioParamType, RadioParamValue, RadioRequest,
     RadioResponse, RadioRxMode,
 };
 use crate::unique_key::UniqueKey;
 use futures::channel::mpsc;
-use futures::future::{Future, FutureExt};
-
+use futures::future::Future;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{BoxStream, StreamExt};
-
-
-
-
-
-
 use std::convert::TryInto;
-
-
-
-use crate::ieee802154::mac::data::{DataService, DataServiceAction};
-use crate::ieee802154::mac::management::{ManagementService, ManagementServiceAction};
-
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -131,11 +118,13 @@ impl SyncRadio {
 }
 
 struct MacData {
-    pib: pib::PIB,
+    pib: PIB,
     radio_requests: BoxSink<'static, RadioRequest, mpsc::SendError>,
     radio_responses: BoxStream<'static, RadioResponse>,
     mlme_output: BoxSink<'static, mlme::Output, mpsc::SendError>,
     mlme_input: BoxStream<'static, mlme::Input>,
+    mcps_output: BoxSink<'static, mcps::Output, mpsc::SendError>,
+    mcps_input: BoxStream<'static, mcps::Input>,
     management: ManagementService,
     data: DataService,
 }
@@ -155,6 +144,8 @@ enum MacInput {
     Radio(RadioResponse),
     MlmeRequest(mlme::Request),
     MlmeResponse(mlme::Response),
+    McpsRequest(mcps::Request),
+    McpsResponse(mcps::Response),
     Management(ManagementServiceAction),
     Data(DataServiceAction),
 }
@@ -165,6 +156,8 @@ impl MacData {
         radio_responses: BoxStream<'static, RadioResponse>,
         mlme_input: BoxStream<'static, mlme::Input>,
         mlme_output: BoxSink<'static, mlme::Output, mpsc::SendError>,
+        mcps_input: BoxStream<'static, mcps::Input>,
+        mcps_output: BoxSink<'static, mcps::Output, mpsc::SendError>,
     ) -> MacData {
         println!("Initializing MAC");
         println!("Getting properties");
@@ -188,7 +181,7 @@ impl MacData {
         println!("Turning radio on");
         radio.set_power(true).await.unwrap();
         println!("Initialization of MAC complete");
-        let pib = pib::PIB::new(extended_address, current_channel, max_tx_power);
+        let pib = PIB::new(extended_address, current_channel, max_tx_power);
         let management = ManagementService::new(&pib);
         let data = DataService::new();
         let (radio_requests, radio_responses) = radio.destroy();
@@ -198,6 +191,8 @@ impl MacData {
             radio_responses,
             mlme_output,
             mlme_input,
+            mcps_output,
+            mcps_input,
             management,
             data,
         }
@@ -215,6 +210,11 @@ impl MacData {
                 mlme::Input::Request(x) => MacInput::MlmeRequest(x),
                 mlme::Input::Response(x) => MacInput::MlmeResponse(x),
             })
+        } else if let Poll::Ready(x) = self.mcps_input.poll_next_unpin(cx) {
+            Poll::Ready(match x.unwrap() {
+                mcps::Input::Request(x) => MacInput::McpsRequest(x),
+                mcps::Input::Response(x) => MacInput::McpsResponse(x),
+            })
         } else {
             Poll::Pending
         }
@@ -228,7 +228,8 @@ impl MacData {
                 MacInput::MlmeRequest(x) => self.process_mlme_request(x).await,
                 MacInput::MlmeResponse(x) => self.process_mlme_response(x).await,
                 MacInput::Radio(x) => self.process_radio_response(x).await,
-                input => println!("MAC: Unhandled input: {:?}", input),
+                MacInput::McpsRequest(x) => self.process_mcps_request(x).await,
+                MacInput::McpsResponse(x) => self.process_mcps_response(x).await,
             }
         }
     }
@@ -250,7 +251,6 @@ impl MacData {
                 .await
                 .unwrap(),
             ManagementServiceAction::SendFrame(f) => self.send_frame(UniqueKey::new(), f).await,
-            action => println!("Unhandled management action: {:?}", action),
         }
     }
 
@@ -297,9 +297,22 @@ impl MacData {
         }
     }
 
+    async fn process_mcps_request(&mut self, request: mcps::Request) {
+        if let Some(confirm) = self.data.process_mcps_request(request) {
+            self.mcps_output
+                .send(mcps::Output::Confirm(confirm))
+                .await
+                .unwrap();
+        }
+    }
+
     async fn process_mlme_response(&mut self, response: mlme::Response) {
         self.management
             .process_mlme_response(&mut self.data, &self.pib, response);
+    }
+
+    async fn process_mcps_response(&mut self, response: mcps::Response) {
+       self.data.process_mcps_response(response)
     }
 
     async fn process_radio_response(&mut self, response: RadioResponse) {
@@ -345,8 +358,18 @@ pub async fn start(
     radio_responses: BoxStream<'static, RadioResponse>,
     mlme_input: BoxStream<'static, mlme::Input>,
     mlme_output: BoxSink<'static, mlme::Output, mpsc::SendError>,
+    mcps_input: BoxStream<'static, mcps::Input>,
+    mcps_output: BoxSink<'static, mcps::Output, mpsc::SendError>,
 ) {
     let radio_responses = radio_responses;
-    let data = MacData::new(radio_requests, radio_responses, mlme_input, mlme_output).await;
+    let data = MacData::new(
+        radio_requests,
+        radio_responses,
+        mlme_input,
+        mlme_output,
+        mcps_input,
+        mcps_output,
+    )
+    .await;
     data.process().await
 }
