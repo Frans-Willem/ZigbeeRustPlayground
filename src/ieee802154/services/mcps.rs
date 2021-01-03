@@ -11,7 +11,7 @@ impl MsduHandle {
     }
 }
 
-pub enum MpcsError {
+pub enum McpsError {
     // TODO: Shared between MLME and MPCS?
     // iee802154::Error instead ?
     InvalidHandle,
@@ -27,7 +27,7 @@ pub struct DataRequest {
 }
 pub struct DataConfirm {
     msdu_handle: MsduHandle,
-    ack_payload: Result<Vec<u8>, MpcsError>,
+    ack_payload: Result<Vec<u8>, McpsError>,
 }
 pub struct DataIndication {
     source: Option<FullAddress>,
@@ -42,7 +42,7 @@ pub struct PurgeRequest {
 }
 pub struct PurgeConfirm {
     msdu_handle: MsduHandle,
-    status: Result<(), MpcsError>,
+    status: Result<(), McpsError>,
 }
 
 pub enum Request {
