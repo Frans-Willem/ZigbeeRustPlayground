@@ -287,7 +287,7 @@ impl ManagementService {
         fast_association: bool,
         status: Result<Option<ShortAddress>, frame::AssociationError>,
     ) {
-        let status = status.map(|addr| addr.unwrap_or(ShortAddress::none_assigned()));
+        let status = status.map(|addr| addr.unwrap_or_else(ShortAddress::none_assigned));
         let command = frame::Command::AssociationResponse(frame::AssociationResponse {
             fast_association,
             status,

@@ -1,4 +1,5 @@
 use crate::ieee802154::frame::{AddressingMode, FullAddress};
+pub use crate::ieee802154::services::error::Error;
 use crate::unique_key::UniqueKey;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -11,43 +12,36 @@ impl MsduHandle {
 }
 
 #[derive(Debug)]
-pub enum McpsError {
-    // TODO: Shared between MLME and MPCS?
-    // iee802154::Error instead ?
-    InvalidHandle,
-}
-
-#[derive(Debug)]
 pub struct DataRequest {
-    source_addressing_mode: AddressingMode,
-    destination: Option<FullAddress>,
-    msdu: Vec<u8>,
-    msdu_handle: MsduHandle,
-    ack_tx: bool,
-    indirect_tx: bool,
+    pub source_addressing_mode: AddressingMode,
+    pub destination: Option<FullAddress>,
+    pub msdu: Vec<u8>,
+    pub msdu_handle: MsduHandle,
+    pub ack_tx: bool,
+    pub indirect_tx: bool,
 }
 #[derive(Debug)]
 pub struct DataConfirm {
-    msdu_handle: MsduHandle,
-    ack_payload: Result<Vec<u8>, McpsError>,
+    pub msdu_handle: MsduHandle,
+    pub ack_payload: Result<Vec<u8>, Error>,
 }
 #[derive(Debug)]
 pub struct DataIndication {
-    source: Option<FullAddress>,
-    destination: Option<FullAddress>,
-    msdu: Vec<u8>,
-    mpdu_link_quality: u8,
-    dsn: Option<u8>,
-    rssi: u8,
+    pub source: Option<FullAddress>,
+    pub destination: Option<FullAddress>,
+    pub msdu: Vec<u8>,
+    pub mpdu_link_quality: u8,
+    pub dsn: Option<u8>,
+    pub rssi: u8,
 }
 #[derive(Debug)]
 pub struct PurgeRequest {
-    msdu_handle: MsduHandle,
+    pub msdu_handle: MsduHandle,
 }
 #[derive(Debug)]
 pub struct PurgeConfirm {
-    msdu_handle: MsduHandle,
-    status: Result<(), McpsError>,
+    pub msdu_handle: MsduHandle,
+    pub status: Result<(), Error>,
 }
 
 #[derive(Debug)]

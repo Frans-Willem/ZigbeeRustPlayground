@@ -16,6 +16,7 @@ enum DeviceQueueState {
         // Sending out a frame, waiting for result.
         send_key: UniqueKey,
         ack_requested: Option<u8>,
+        ack_payload: Vec<u8>,
     },
     WaitingForAck {
         // Waiting for an Ack frame
@@ -84,6 +85,24 @@ impl DeviceQueue {
         true
     }
 
+    pub fn remove(&mut self, key: UniqueKey) -> bool {
+        let pre_len = self.entries.len();
+        let first_removed = self
+            .entries
+            .front()
+            .map_or(false, |front| front.data.key == key);
+        self.entries.retain(|e| e.data.key != key);
+        if first_removed {
+            self.state = DeviceQueueState::Idle { datarequest: false };
+        }
+        if first_removed || pre_len > self.entries.len() {
+            self.waker.wake();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn process_datarequest(&mut self) {
         if let DeviceQueueState::Idle { .. } = self.state {
             self.state = DeviceQueueState::Idle { datarequest: true };
@@ -91,7 +110,11 @@ impl DeviceQueue {
         self.waker.wake();
     }
 
-    fn create_frame(request: &DataRequest, pib: &mut PIB) -> (Option<u8>, frame::Frame) {
+    fn create_frame(
+        request: &DataRequest,
+        pib: &mut PIB,
+        more_pending: bool,
+    ) -> (Option<u8>, frame::Frame) {
         let source = match request.source_mode {
             frame::AddressingMode::None => None,
             frame::AddressingMode::Reserved => None,
@@ -100,7 +123,7 @@ impl DeviceQueue {
         };
         let sequence_nr = pib.next_data_sequence_nr();
         let frame = frame::Frame {
-            frame_pending: false, // TODO: Check this?
+            frame_pending: more_pending,
             acknowledge_request: request.acknowledge_request,
             sequence_number: Some(sequence_nr),
             destination: request.destination,
@@ -119,12 +142,13 @@ impl DeviceQueue {
         if let DeviceQueueState::Sending {
             send_key,
             ack_requested: _,
-        } = self.state
+            ack_payload,
+        } = &self.state
         {
-            if send_key == key {
+            if *send_key == key {
                 if success {
                     self.state = DeviceQueueState::HaveResult {
-                        result: Ok(Vec::new()),
+                        result: Ok(ack_payload.clone()),
                     };
                 } else if let Some(front_entry) = self.entries.front_mut() {
                     if front_entry.data.indirect {
@@ -144,22 +168,24 @@ impl DeviceQueue {
         }
     }
 
-    pub fn process_acknowledge(&mut self, seq_nr: Option<u8>, payload: &Vec<u8>) {
+    pub fn process_acknowledge(&mut self, seq_nr: Option<u8>, payload: &[u8]) {
         if let DeviceQueueState::WaitingForAck { ack_requested, .. } = self.state {
             if seq_nr == Some(ack_requested) {
                 self.state = DeviceQueueState::HaveResult {
-                    result: Ok(payload.clone()),
+                    result: Ok(payload.into()),
                 }
             }
         } else if let DeviceQueueState::Sending {
             send_key,
             ack_requested,
+            ack_payload: _,
         } = self.state
         {
-            if ack_requested == seq_nr {
+            if ack_requested.is_some() && ack_requested == seq_nr {
                 self.state = DeviceQueueState::Sending {
                     send_key,
                     ack_requested: None,
+                    ack_payload: payload.into(),
                 };
             }
         }
@@ -189,12 +215,17 @@ impl DeviceQueue {
                     // If idle, and the front entry is not indirect, or a datarequest was received,
                     // send out a frame.
                     if !front_entry.data.indirect || datarequest {
+                        let more_pending = self
+                            .entries
+                            .get(1)
+                            .map_or(false, |second_entry| second_entry.data.indirect);
                         let (ack_requested, frame) =
-                            DeviceQueue::create_frame(&front_entry.data, pib);
+                            DeviceQueue::create_frame(&front_entry.data, pib, more_pending);
                         let send_key = UniqueKey::new();
                         self.state = DeviceQueueState::Sending {
                             send_key,
                             ack_requested,
+                            ack_payload: Vec::new(),
                         };
                         return Poll::Ready(DeviceQueueAction::SendFrame(send_key, frame));
                     }

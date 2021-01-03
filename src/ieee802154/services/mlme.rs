@@ -1,23 +1,13 @@
 use crate::ieee802154::frame::FullAddress;
 use crate::ieee802154::frame::{AssociationError, CapabilityInformation};
 use crate::ieee802154::pib::{PIBProperty, PIBValue};
+pub use crate::ieee802154::services::error::Error;
 use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 
 #[derive(Debug)]
 pub enum BeaconType {
     Beacon,
     EnhancedBeacon,
-}
-
-#[derive(Debug)]
-pub enum Error {
-    ChannelAccessFailure,
-    FrameTooLong,
-    ReadOnly,
-    UnsupportedAttribute,
-    InvalidIndex,
-    InvalidParameter,
-    NoShortAddress,
 }
 
 #[derive(Debug)]

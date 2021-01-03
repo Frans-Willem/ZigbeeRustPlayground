@@ -1,8 +1,89 @@
-use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
 use crate::pack::{ExtEnum, Pack, PackError, PackTagged, PackTarget, UnpackError};
 use bitfield::bitfield;
 
-// TODO: Move Address & FullAddress somewhere in the main 802154 package?
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Pack)]
+pub struct ShortAddress(pub u16);
+
+impl std::fmt::Debug for ShortAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("ShortAddress({:#4X})", self.0))
+    }
+}
+
+impl From<u16> for ShortAddress {
+    fn from(x: u16) -> Self {
+        Self(x)
+    }
+}
+
+impl Into<u16> for ShortAddress {
+    fn into(self) -> u16 {
+        self.0
+    }
+}
+
+impl ShortAddress {
+    pub fn broadcast() -> Self {
+        ShortAddress(0xFFFF)
+    }
+
+    pub fn invalid() -> Self {
+        ShortAddress(0xFFFF)
+    }
+
+    pub fn none_assigned() -> Self {
+        ShortAddress(0xFFFE)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Pack)]
+pub struct ExtendedAddress(pub u64);
+
+impl std::fmt::Debug for ExtendedAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("ExtendedAddress({:#16X})", self.0))
+    }
+}
+
+impl From<u64> for ExtendedAddress {
+    fn from(x: u64) -> Self {
+        Self(x)
+    }
+}
+
+impl Into<u64> for ExtendedAddress {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Pack)]
+pub struct PANID(pub u16);
+
+impl std::fmt::Debug for PANID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("PANID({:#4X})", self.0))
+    }
+}
+
+impl From<u16> for PANID {
+    fn from(x: u16) -> Self {
+        Self(x)
+    }
+}
+
+impl Into<u16> for PANID {
+    fn into(self) -> u16 {
+        self.0
+    }
+}
+
+impl PANID {
+    pub fn broadcast() -> Self {
+        PANID(0xFFFF)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PackTagged)]
 #[tag_type(AddressingMode)]
 pub enum Address {
@@ -10,6 +91,17 @@ pub enum Address {
     Short(ShortAddress),
     #[tag(AddressingMode::Extended)]
     Extended(ExtendedAddress),
+}
+
+impl From<ShortAddress> for Address {
+    fn from(value: ShortAddress) -> Self {
+        Self::Short(value)
+    }
+}
+impl From<ExtendedAddress> for Address {
+    fn from(value: ExtendedAddress) -> Self {
+        Self::Extended(value)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -381,7 +473,8 @@ impl Pack for AssociationResponse {
         let (status, data) = match status {
             0 => (Ok(short_address), data),
             x => {
-                // TODO: Check for 0xFFFF ?
+                // NOTE: Theoretically, we should probably check to see that short_address is
+                // indeed 0xFFFF on error, but for compatibility reasons, we'll let this slide.
                 let (error, data) = AssociationError::unpack_data(x, data)?;
                 (Err(error), data)
             }

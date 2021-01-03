@@ -12,20 +12,15 @@ mod radio;
 mod unique_key;
 mod waker_store;
 use futures::{future, select};
+use ieee802154::frame;
 use ieee802154::mac;
 use ieee802154::pib::PIBProperty;
-use ieee802154::services::mlme;
+use ieee802154::services::{mcps, mlme};
 use ieee802154::{ShortAddress, PANID};
 
 use radio::{RadioRequest, RadioResponse};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::sync::{Arc, Mutex};
-
-#[derive(Debug)]
-enum MainloopInput {
-    MlmeConfirm(mlme::Confirm),
-    MlmeIndication(mlme::Indication),
-}
 
 async fn send_request(
     mlme_input: &mut (dyn Sink<mlme::Input, Error = mpsc::SendError> + Unpin + Send),
@@ -45,6 +40,21 @@ async fn send_response(
         .await
         .unwrap();
 }
+async fn send_mcps_request(
+    mcps_input: &mut (dyn Sink<mcps::Input, Error = mpsc::SendError> + Unpin + Send),
+    request: mcps::Request,
+) {
+    mcps_input
+        .send(mcps::Input::Request(request))
+        .await
+        .unwrap();
+}
+
+#[derive(Debug)]
+enum MainloopInput {
+    Mlme(mlme::Output),
+    Mcps(mcps::Output),
+}
 
 /**
  * Normal startup described in 6.3.3.1 of 802.15.4-2015:
@@ -55,6 +65,8 @@ async fn send_response(
 async fn mainloop(
     mut mlme_input: Box<dyn Sink<mlme::Input, Error = mpsc::SendError> + Unpin + Send>,
     mlme_output: Box<dyn Stream<Item = mlme::Output> + Unpin + Send>,
+    mut mcps_input: Box<dyn Sink<mcps::Input, Error = mpsc::SendError> + Unpin + Send>,
+    mcps_output: Box<dyn Stream<Item = mcps::Output> + Unpin + Send>,
 ) {
     send_request(
         mlme_input.as_mut(),
@@ -122,15 +134,17 @@ async fn mainloop(
     )
     .await;
     let mut mlme_output = mlme_output.fuse();
+    let mut mcps_output = mcps_output.fuse();
     while let Some(input) = select! {
-        x = mlme_output.next() => x,
+        x = mlme_output.next() => x.map(MainloopInput::Mlme),
+        x = mcps_output.next() => x.map(MainloopInput::Mcps),
     } {
         match input {
-            mlme::Output::Indication(mlme::Indication::BeaconRequest {
+            MainloopInput::Mlme(mlme::Output::Indication(mlme::Indication::BeaconRequest {
                 beacon_type,
                 src_addr: _,
                 dst_pan_id: _,
-            }) => {
+            })) => {
                 println!("Beacon request!");
                 let request = mlme::BeaconRequest {
                     beacon_type,
@@ -141,11 +155,27 @@ async fn mainloop(
                 };
                 send_request(mlme_input.as_mut(), mlme::Request::Beacon(request)).await;
             }
-            mlme::Output::Indication(mlme::Indication::Associate {
+            MainloopInput::Mlme(mlme::Output::Indication(mlme::Indication::Associate {
                 device_address,
                 capability_information,
-            }) => {
+            })) => {
                 let address = ShortAddress(0x4567);
+                let mut data = Vec::new();
+                let mut nwk_header = vec![
+                    0x48, 0x00, // FCF
+                    0x67, 0x45, // Destination
+                    0x00, 0x00, // Source
+                    0x1E, // Radius (30),
+                    0x28, // Sequence
+                ];
+                let mut aps_header = vec![
+                    0x21, 0x06, 0x10, 0x01, 0x00, 0x00, 0x00, 0xe3, 0xbd, 0x18, 0x74, 0x09, 0x2c,
+                    0x2c, 0xa3, 0x58, 0x1d, 0x8a, 0x23, 0xb9, 0x6c, 0x3b, 0x80, 0xf0, 0xad, 0x27,
+                    0x1c, 0x59, 0x8a, 0xdf, 0x27, 0xbc, 0x21, 0xc7, 0x47, 0xf0, 0x31, 0x74, 0x80,
+                    0xbc, 0x8c, 0x53, 0x88, 0x11, 0x8f, 0x02,
+                ];
+                data.append(&mut nwk_header);
+                data.append(&mut aps_header);
                 send_response(
                     mlme_input.as_mut(),
                     mlme::Response::Associate {
@@ -155,6 +185,21 @@ async fn mainloop(
                     },
                 )
                 .await;
+                send_mcps_request(
+                    mcps_input.as_mut(),
+                    mcps::Request::Data(mcps::DataRequest {
+                        source_addressing_mode: frame::AddressingMode::Short,
+                        destination: Some(frame::FullAddress {
+                            pan_id: PANID(0x1234),
+                            address: address.into(),
+                        }),
+                        msdu: data,
+                        msdu_handle: mcps::MsduHandle::new(),
+                        ack_tx: true,
+                        indirect_tx: true,
+                    }),
+                )
+                .await
             }
             input => println!("Mainloop unhandled input: {:?}", input),
         }
@@ -211,7 +256,7 @@ fn main() {
         if let RadioRequest::SendPacket(_token, packet) = &request {
             let mut packet_data = packet.clone();
             packet_data.push(0);
-            packet_data.push(0 | 0x80);
+            packet_data.push(0x80);
             let header = pcap::PacketHeader {
                 ts: libc::timeval {
                     tv_sec: 0,
@@ -248,7 +293,12 @@ fn main() {
         Box::pin(mcps_output_in),
     ))
     .unwrap();
-    exec.spawn(mainloop(Box::new(mlme_input_in), Box::new(mlme_output_out)))
-        .unwrap();
+    exec.spawn(mainloop(
+        Box::new(mlme_input_in),
+        Box::new(mlme_output_out),
+        Box::new(mcps_input_in),
+        Box::new(mcps_output_out),
+    ))
+    .unwrap();
     task::block_on(exec);
 }

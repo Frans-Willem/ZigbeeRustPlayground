@@ -1,9 +1,9 @@
-use crate::waker_store::WakerStore;
-use crate::unique_key::UniqueKey;
-use crate::ieee802154::{PANID, ShortAddress, ExtendedAddress};
-use crate::ieee802154::frame::{FullAddress, Address};
-use std::task::{Poll, Context};
+use crate::ieee802154::frame::{Address, FullAddress};
 use crate::ieee802154::mac::pendingtable::PendingTable;
+use crate::ieee802154::{ExtendedAddress, ShortAddress, PANID};
+use crate::unique_key::UniqueKey;
+use crate::waker_store::WakerStore;
+use std::task::{Context, Poll};
 
 pub enum CombinedPendingTableAction {
     Init(UniqueKey),

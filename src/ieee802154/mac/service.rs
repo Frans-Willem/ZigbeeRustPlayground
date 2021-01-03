@@ -243,7 +243,6 @@ impl MacData {
     }
 
     async fn process_management(&mut self, action: ManagementServiceAction) {
-        println!("MGMT: {:?}", action);
         match action {
             ManagementServiceAction::SetParam(k, p, v) => self
                 .radio_requests
@@ -255,7 +254,6 @@ impl MacData {
     }
 
     async fn process_data(&mut self, action: DataServiceAction) {
-        println!("DATA: {:?}", action);
         match action {
             DataServiceAction::InitPendingTable(key) => self
                 .radio_requests
@@ -281,7 +279,11 @@ impl MacData {
                 .await
                 .unwrap(),
             DataServiceAction::SendFrame(key, frame) => self.send_frame(key, frame).await,
-            action => println!("Unhandled data action: {:?}", action),
+            DataServiceAction::Confirm(confirm) => self
+                .mcps_output
+                .send(mcps::Output::Confirm(confirm))
+                .await
+                .unwrap(),
         }
     }
 
@@ -298,7 +300,7 @@ impl MacData {
     }
 
     async fn process_mcps_request(&mut self, request: mcps::Request) {
-        if let Some(confirm) = self.data.process_mcps_request(request) {
+        if let Some(confirm) = self.data.process_mcps_request(&self.pib, request) {
             self.mcps_output
                 .send(mcps::Output::Confirm(confirm))
                 .await
@@ -312,7 +314,7 @@ impl MacData {
     }
 
     async fn process_mcps_response(&mut self, response: mcps::Response) {
-       self.data.process_mcps_response(response)
+        self.data.process_mcps_response(response)
     }
 
     async fn process_radio_response(&mut self, response: RadioResponse) {
@@ -337,9 +339,7 @@ impl MacData {
 
     async fn process_radio_packet(&mut self, packet: RadioPacket) {
         let (frame, _rest) = frame::Frame::unpack(&packet.data).unwrap();
-        println!("FRAME: {:?}", frame);
         if let Some(indication) = self.management.process_frame(&mut self.pib, &frame) {
-            println!("INDICATION: {:?}", indication);
             self.mlme_output
                 .send(mlme::Output::Indication(indication))
                 .await
